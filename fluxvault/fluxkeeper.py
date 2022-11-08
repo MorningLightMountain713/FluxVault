@@ -2,75 +2,48 @@
 import asyncio
 import binascii
 import time
+from typing import Callable
 
 # 3rd party
 import requests
+from aiotinyrpc.client import RPCClient
+from aiotinyrpc.dispatch import RPCDispatcher
+from aiotinyrpc.exc import MethodNotFoundError
+from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
+from aiotinyrpc.transports.socket import EncryptedSocketClientTransport
 from requests.exceptions import HTTPError
 
-from tinyrpc.client import RPCClient as _RPCClient
-from tinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from tinyrpc.exc import RPCError
 
-# this package - will move this to tinyrpc
-from fluxvault.socketclienttransport import SocketClientTransport
-
-
-class RPCClient(_RPCClient):
-    async def _send_and_handle_reply(self, req, one_way):
-        if self.transport.is_async:
-            reply = await self.transport.send_message(req.serialize(), not one_way)
-
-        else:
-            # sends and expects for reply if connection is not one way
-            reply = self.transport.send_message(req.serialize(), not one_way)
-
-        if one_way:
-            return
-
-        # waits for reply
-        response = self.protocol.parse_reply(reply)
-
-        if hasattr(response, "error"):
-            raise RPCError("Error calling remote procedure: %s" % response.error)
-
-        return response
-
-    def call(self, method, args=[], kwargs={}, one_way=False):
-        """Calls the requested method and returns the result.
-
-        If an error occured, an :py:class:`~tinyrpc.exc.RPCError` instance
-        is raised.
-
-        :param method: Name of the method to call.
-        :param args: Arguments to pass to the method.
-        :param kwargs: Keyword arguments to pass to the method.
-        :param one_way: Whether or not a reply is desired.
-        """
-        loop = asyncio.get_event_loop()
-        req = self.protocol.create_request(method, args, kwargs, one_way)
-
-        rep = loop.run_until_complete(self._send_and_handle_reply(req, one_way))
-
-        if one_way:
-            return
-
-        return rep.result
-
-
+# ToDo: async
 class FluxKeeper:
+    """Oracle like object than runs in your protected environment. Provides runtime
+    data to your vulnerable services in a secure manner
+
+    The end goal is to be able to secure an application's private data where visibility
+    of that data is restricted to the application owner
+
+    This class, in combination with FluxVault - is one of the first steps in fulfilling
+    the above goal"""
+
     def __init__(
-        self, vault_dir: str, comms_port: int, app_name: str = "", agent_ips: list = []
+        self,
+        vault_dir: str,
+        comms_port: int,
+        app_name: str = "",
+        agent_ips: list = [],
+        extensions: RPCDispatcher = RPCDispatcher(),
     ):
         self.app_name = app_name
         self.agent_ips = agent_ips if agent_ips else self.get_agent_ips()
         self.agents = {}
+        self.extensions = extensions
         self.uncontactable_agents = []
         self.vault_dir = vault_dir
         self.loop = asyncio.get_event_loop()
         self.protocol = JSONRPCProtocol()
 
         for ip in self.agent_ips:
-            transport = SocketClientTransport(ip, comms_port)
+            transport = EncryptedSocketClientTransport(ip, comms_port)
 
             if transport.connected():
                 rpc_client = RPCClient(self.protocol, transport)
@@ -79,6 +52,9 @@ class FluxKeeper:
             else:
                 print(f"Agent {ip}:{comms_port} uncontactable")
                 self.uncontactable_agents.append((ip, comms_port))
+
+        self.extensions.add_method(self.get_all_agents_methods)
+        self.extensions.add_method(self.poll_all_agents)
 
     def get_agent_ips(self):
         url = f"https://api.runonflux.io/apps/location/{self.app_name}"
@@ -123,23 +99,33 @@ class FluxKeeper:
         file_found = True
         secret = ""
 
+        print("comparing files")
         try:
             # ToDo: file name is brittle
             # ToDo: catch file PermissionError
-            with open(self.vault_dir + "/" + name) as file:
+            with open(self.vault_dir + "/" + name, "rb") as file:
+                print("file opened")
                 file_data = file.read()
         except FileNotFoundError:
+            print("file not found!!")
             file_found = False
             crc_matched = False
         else:  # file opened
-            mycrc = binascii.crc32(file_data.encode("utf-8"))
+            mycrc = binascii.crc32(file_data)
             if crc != mycrc:
                 secret = file_data
                 crc_matched = False
 
         return {"file_found": file_found, "crc_matched": crc_matched, "secret": secret}
 
+    def get_methods(self):
+        """Returns methods available for the keeper to call"""
+        return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
+
     def get_all_agents_methods(self):
+        """Queries every agent and returns a list describing what methods can be run on
+        each agent"""
+        # Todo test multiple agents
         for agent in self.agents.values():
             return agent.get_methods()
 
@@ -150,8 +136,23 @@ class FluxKeeper:
             print(f"Remote file CRCs: {files}")
             for file in files:
                 match_data = self.compare_files(file)
+                print(match_data)
                 if match_data["secret"]:
                     print(f"File {file['name']} found, writing new content")
                     files_to_write.update({file["name"]: match_data["secret"]})
             if files_to_write:
                 agent.write_files(files=files_to_write)
+
+    def run_agent_entrypoint(self):
+        print(self.agents)
+        agent = self.agents["127.0.0.1"]
+        agent.one_way = True
+        agent.run_entrypoint("/app/entrypoint.sh")
+
+    def __getattr__(self, name: str) -> Callable:
+        try:
+            method = self.extensions.get_method(name)
+        except MethodNotFoundError as e:
+            raise AttributeError(f"Method does not exist: {e}")
+
+        return method

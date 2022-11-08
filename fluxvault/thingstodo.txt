@@ -1,0 +1,7 @@
+Sort docstrings
+Sort function typing
+Sort logging to file? journalctl?
+Sort debug messages to stdout
+Move tinyrpc stuff to another package (fork tinyrpc)
+Think about use a component. Webserver sharing files. Program a mysql database POC?
+Look at making SocketTransport encryptable (or just in the clear)

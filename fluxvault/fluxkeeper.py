@@ -1,17 +1,21 @@
 # Standard library
 import asyncio
 import binascii
+import logging
 import time
+from enum import Enum
 from typing import Callable
 
 # 3rd party
 import requests
 from aiotinyrpc.client import RPCClient
-from aiotinyrpc.dispatch import RPCDispatcher
 from aiotinyrpc.exc import MethodNotFoundError
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.transports.socket import EncryptedSocketClientTransport
 from requests.exceptions import HTTPError
+
+# this package
+from fluxvault.extensions import FluxVaultExtensions
 
 
 # ToDo: async
@@ -23,24 +27,31 @@ class FluxKeeper:
     of that data is restricted to the application owner
 
     This class, in combination with FluxVault - is one of the first steps in fulfilling
-    the above goal"""
+    that goal"""
 
     def __init__(
         self,
         vault_dir: str,
-        comms_port: int,
+        comms_port: int = 8888,
         app_name: str = "",
         agent_ips: list = [],
-        extensions: RPCDispatcher = RPCDispatcher(),
+        extensions: FluxVaultExtensions = FluxVaultExtensions(),
+        log_to_file: bool = False,
+        log_file_name: str = "fluxvault_keeper.log",
+        debug: bool = False,
     ):
         self.app_name = app_name
         self.agent_ips = agent_ips if agent_ips else self.get_agent_ips()
         self.agents = {}
+        self.debug = debug
         self.extensions = extensions
-        self.uncontactable_agents = []
-        self.vault_dir = vault_dir
+        self.log_file_name = log_file_name
+        self.log_to_file = log_to_file
+        self.log = self.get_logger()
         self.loop = asyncio.get_event_loop()
         self.protocol = JSONRPCProtocol()
+        self.uncontactable_agents = []
+        self.vault_dir = vault_dir
 
         for ip in self.agent_ips:
             transport = EncryptedSocketClientTransport(ip, comms_port)
@@ -50,11 +61,15 @@ class FluxKeeper:
                 flux_agent = rpc_client.get_proxy()
                 self.agents.update({ip: flux_agent})
             else:
-                print(f"Agent {ip}:{comms_port} uncontactable")
+                self.log.warn(f"Agent {ip}:{comms_port} uncontactable")
                 self.uncontactable_agents.append((ip, comms_port))
 
         self.extensions.add_method(self.get_all_agents_methods)
         self.extensions.add_method(self.poll_all_agents)
+
+    def get_logger(self) -> logging.Logger:
+        """Gets a logger"""
+        return logging.getLogger("flux_vault")
 
     def get_agent_ips(self):
         url = f"https://api.runonflux.io/apps/location/{self.app_name}"
@@ -89,34 +104,36 @@ class FluxKeeper:
         return node_ips
 
     def compare_files(self, file: dict) -> dict:
-        """Node is requesting a file"""
+        """Flux agent (node) is requesting a file"""
 
         # ToDo: Errors
         name = file["name"]
         crc = file["crc32"]
 
-        crc_matched = True
-        file_found = True
+        remote_file_exists = False
+        file_found_locally = True
         secret = ""
 
-        print("comparing files")
+        if crc:  # remote file crc is 0 if it doesn't exist
+            remote_file_exists = True
+
         try:
             # ToDo: file name is brittle
             # ToDo: catch file PermissionError
             with open(self.vault_dir + "/" + name, "rb") as file:
-                print("file opened")
                 file_data = file.read()
         except FileNotFoundError:
-            print("file not found!!")
-            file_found = False
-            crc_matched = False
+            file_found_locally = False
         else:  # file opened
             mycrc = binascii.crc32(file_data)
             if crc != mycrc:
                 secret = file_data
-                crc_matched = False
 
-        return {"file_found": file_found, "crc_matched": crc_matched, "secret": secret}
+        return {
+            "file_found_locally": file_found_locally,
+            "remote_file_exists": remote_file_exists,
+            "secret": secret,
+        }
 
     def get_methods(self):
         """Returns methods available for the keeper to call"""
@@ -130,24 +147,52 @@ class FluxKeeper:
             return agent.get_methods()
 
     def poll_all_agents(self):
-        for agent in self.agents.values():
+        """Checks if agents need any files delivered securely"""
+        for address, agent in self.agents.items():
+            self.log.debug(f"Contacting Agent {address} to check if files required")
             files_to_write = {}
             files = agent.get_all_files_crc()
-            print(f"Remote file CRCs: {files}")
+            self.log.debug(f"Agent {address} remote file CRCs: {files}")
             for file in files:
                 match_data = self.compare_files(file)
-                print(match_data)
+                self.log_file_match_details(file["name"], match_data)
                 if match_data["secret"]:
-                    print(f"File {file['name']} found, writing new content")
                     files_to_write.update({file["name"]: match_data["secret"]})
             if files_to_write:
                 agent.write_files(files=files_to_write)
+
+    def log_file_match_details(self, file_name, match_data):
+        if not match_data["file_found_locally"]:
+            self.log.error(
+                f"Agent requested file {self.vault_dir}/{file_name} not found locally... skipping!"
+            )
+        if match_data["remote_file_exists"] and match_data["secret"]:
+            self.log.info(
+                f"Agent remote file {file_name} is different that local file... sending latest data"
+            )
+        elif match_data["remote_file_exists"]:
+            self.log.info(
+                f"Agent Requested file {file_name} is up to date... skipping!"
+            )
+        elif match_data["secret"]:
+            self.log.info(f"Agent requested new file {file_name}... sending")
 
     def run_agent_entrypoint(self):
         print(self.agents)
         agent = self.agents["127.0.0.1"]
         agent.one_way = True
         agent.run_entrypoint("/app/entrypoint.sh")
+
+    def start(self, extensions):
+        # ToDo: finish this - cmd line script calls this
+        flux_keeper = FluxKeeper(
+            vault_dir="vault",
+            comms_port=8888,
+            agent_ips=["127.0.0.1"],
+            extensions=extensions,
+            log_to_file=True,
+            debug=False,
+        )
 
     def __getattr__(self, name: str) -> Callable:
         try:

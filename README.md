@@ -1,7 +1,8 @@
 # FluxVault
-Flux Vault - load private data into running docker
+Flux Vault - load private data into running container
 
-The goal of this is to provide a way to securely load passwords in a running Flux Docker
+The goal of this package is to provide a way to securely load passwords and private data
+into a running Flux application / container.
 
 vault.py defines two Classes FluxAgent and FluxNode an application can create a custom class
 which will allow configurating and also expanding the functionality.

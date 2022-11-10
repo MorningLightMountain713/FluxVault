@@ -1,13 +1,34 @@
 import asyncio
 import time
 
-from aiotinyrpc.dispatch import RPCDispatcher
-
 from fluxvault import FluxAgent
+from fluxvault.extensions import FluxVaultExtensions
 
-# the dispatcher allows these functions to be called from the remote end, to see
+import logging
+
+vault_log = logging.getLogger("flux_vault")
+aiotinyrpc_log = logging.getLogger("aiotinyrpc")
+level = logging.DEBUG
+
+formatter = logging.Formatter(
+    "%(asctime)s: %(name)s: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
+)
+
+vault_log.setLevel(level)
+aiotinyrpc_log.setLevel(level)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+file_handler = logging.FileHandler("keeper.log", mode="a")
+file_handler.setFormatter(formatter)
+
+vault_log.addHandler(stream_handler)
+aiotinyrpc_log.addHandler(stream_handler)
+
+
+# the extension allows these functions to be called from the remote end, to see
 # what functions are available on the remote end call get_methods (from the keeper)
-extensions = RPCDispatcher()
+extensions = FluxVaultExtensions()
 
 # this will run on the main loop as it's async (preferred), works with any async
 # library, i.e. aiohttp, aiomysql, etc
@@ -27,10 +48,9 @@ def sync_demo():
 
 
 agent = FluxAgent(
-    whitelisted_addresses=["172.17.0.1"],
     extensions=extensions,
-    working_dir="/app",
-    managed_files=["app.tar.gz"],
+    working_dir="/tmp",
+    managed_files=["quotes.txt", "secret_password.txt"],
 )
 
 # all options

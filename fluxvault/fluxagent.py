@@ -1,39 +1,63 @@
 # standard library
+from __future__ import annotations
 import asyncio
 import binascii
-import time
 import os
+import time
 
 # 3rd party
 import aiofiles
-from aiotinyrpc.dispatch import RPCDispatcher
+from aiohttp import streamer, web
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.server import RPCServer
-
-# this package - will move this to tinyrpc
-# from fluxvault.socketservertransport import SocketServerTransport
-# from fluxvault.dispatch import RPCDispatcher
-# from fluxvault.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
+
+# this package
+from fluxvault.extensions import FluxVaultExtensions
+
+
+class FluxAgentException(Exception):
+    pass
 
 
 class FluxAgent:
     """Runs on Flux nodes - waits for connection from FluxKeeper"""
 
+    @streamer
+    async def file_sender(writer, file_path=None):
+        """
+        This function will read large file chunk by chunk and send it through HTTP
+        without reading them into memory
+        """
+        with open(file_path, "rb") as f:
+            chunk = f.read(2**16)
+            while chunk:
+                await writer.write(chunk)
+                chunk = f.read(2**16)
+
     def __init__(
         self,
         bind_address: str = "0.0.0.0",
         bind_port: int = 8888,
-        extensions: RPCDispatcher = RPCDispatcher(),
+        enable_local_fileserver: bool = False,
+        local_fileserver_port: int = 2080,
+        extensions: FluxVaultExtensions = FluxVaultExtensions(),
         managed_files: list = [],
         working_dir: str = "/tmp",
         whitelisted_addresses: list = ["127.0.0.1"],
         authenticate_vault: bool = True,
     ):
+        self.app = web.Application()
+        self.enable_local_fileserver = enable_local_fileserver
         self.extensions = extensions
-        self.working_dir = working_dir
-        self.managed_files = managed_files
+        self.local_fileserver_port = local_fileserver_port
         self.loop = asyncio.get_event_loop()
+        self.managed_files = managed_files
+        self.ready_to_serve = False
+        self.runners = []
+        self.working_dir = working_dir
+
+        self.test_workdir_access()
 
         if authenticate_vault and not whitelisted_addresses:
             raise ValueError("whitelisted addresse(s) required if authenticating vault")
@@ -50,21 +74,75 @@ class FluxAgent:
             whitelisted_addresses=whitelisted_addresses,
             authenticate_clients=authenticate_vault,
         )
-
         self.rpc_server = RPCServer(transport, JSONRPCProtocol(), self.extensions)
 
+        self.app.router.add_get("/file/{file_name}", self.download_file)
+
+    def test_workdir_access(self):
+        """Minimal test to ensure we can at least read the working dir, could expand on
+        this in future"""
+        try:
+            os.listdir(self.working_dir)
+        except Exception as e:
+            raise FluxAgentException(f"Error accessing working directory: {e}")
+
     def run(self):
+        if self.enable_local_fileserver:
+            self.loop.create_task(self.start_site(self.app, self.local_fileserver_port))
+            print(f"Local file server running on port {self.local_fileserver_port}")
+        #  ToDo: this needs to be modified so it gets added to loop, then loop forever
         self.rpc_server.serve_forever()
 
-    def get_methods(self):
+        # try:
+        #     loop.run_forever()
+        # finally:
+        #     for runner in self.runners:
+        #         loop.run_until_complete(runner.cleanup())
+
+    async def start_site(
+        self, app: web.Application, address: str = "0.0.0.0", port: int = 2080
+    ):
+        runner = web.AppRunner(app)
+        self.runners.append(runner)
+        await runner.setup()
+        site = web.TCPSite(runner, address, port)
+        await site.start()
+
+    async def download_file(self, request: web.Request) -> web.Response:
+        if not self.ready_to_serve:
+            return web.Response(
+                body="Service unavailable - waiting for Keeper to connect",
+                status=503,
+            )
+
+        file_name = request.match_info["file_name"]
+        headers = {
+            "Content-disposition": "attachment; filename={file_name}".format(
+                file_name=file_name
+            )
+        }
+
+        file_path = os.path.join(self.working_dir, file_name)
+
+        if not os.path.exists(file_path):
+            return web.Response(
+                body="File <{file_name}> does not exist".format(file_name=file_name),
+                status=404,
+            )
+
+        return web.Response(
+            body=FluxAgent.file_sender(file_path=file_path), headers=headers
+        )
+
+    def get_methods(self) -> dict:
         """Returns methods available for the keeper to call"""
         return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
 
-    async def get_file_crc(self, fname):
+    async def get_file_crc(self, fname: str) -> dict:
         """Open the file and compute the crc, set crc=0 if not found"""
         # ToDo: catch file PermissionError
         try:
-            # Todo: brittle
+            # Todo: brittle as
             async with aiofiles.open(self.working_dir + "/" + fname, mode="rb") as file:
                 content = await file.read()
                 file.close()
@@ -91,18 +169,28 @@ class FluxAgent:
 
         return os.open(path, flags, 0o777)
 
-    async def write_file(self, fname, data):
-        # ToDo: brittle af ("file location")
-        # also ToDo: catch file PermissionError etc
+    async def write_file(self, fname: str, data: str | bytes, executable: bool = False):
+        """Write a single file to disk"""
+        # ToDo: brittle file path
+        # ToDo: catch file PermissionError etc
 
-        # os.umask(0)
+        # os.umask(0) - set this is for everyone but doesn't really matter here
+
+        if isinstance(data, bytes):
+            mode = "wb"
+        elif isinstance(data, str):
+            mode = "w"
+        else:
+            raise ValueError("Data written must be either str or bytes")
+
+        # this will make the file being written executable
+        opener = self.opener if executable else None
         try:
             async with aiofiles.open(
-                self.working_dir + "/" + fname,
-                mode="wb",
-                # self.working_dir + "/" + fname, mode="wb", opener=self.opener
+                self.working_dir + "/" + fname, mode=mode, opener=opener
             ) as file:
                 await file.write(data)
+        # ToDo: whoa, tighten this up
         except Exception as e:
             print(repr(e))
 
@@ -127,7 +215,8 @@ class FluxAgent:
         except Exception as e:
             print(repr(e))
 
-    async def run_entrypoint(self, entrypoint):
+    async def run_entrypoint(self, entrypoint: str):
+        # ToDo: don't use shell
         proc = await asyncio.create_subprocess_shell(entrypoint)
 
         await proc.communicate()

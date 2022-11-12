@@ -27,7 +27,7 @@ Installation:
 pip install fluxvault
 ```
 
-THis will give you access to the `fluxvault` application.
+This will give you access to the `fluxvault` application.
 
 ![fluxvault main](https://github.com/MorningLightMountain713/FluxVault/blob/feature/async_rpc/fluxvault_main.png?raw=true)
 

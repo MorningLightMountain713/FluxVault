@@ -1,12 +1,15 @@
-import daemon  # python-daemon package
-
 import typer
 
 import time
 
 import logging
 
+from fluxvault import FluxKeeper, FluxAgent
+
+
 PREFIX = "FLUXVAULT"
+
+app = typer.Typer(rich_markup_mode="rich", add_completion=False)
 
 
 def configure_logs(log_to_file, logfile_path, debug):
@@ -33,72 +36,8 @@ def configure_logs(log_to_file, logfile_path, debug):
         vault_log.addHandler(file_handler)
 
 
-def callback(
-    debug: bool = typer.Option(
-        False,
-        "--debug",
-        envvar=f"{PREFIX}_DEBUG",
-        show_envvar=False,
-        help="Enable extra debug logging",
-    ),
-    enable_logfile: bool = typer.Option(
-        False,
-        "--log-to-file",
-        "-l",
-        envvar=f"{PREFIX}_ENABLE_LOGFILE",
-        show_envvar=False,
-        help="Turn on logging to file",
-    ),
-    logfile_path: str = typer.Option(
-        "/tmp/fluxvault.log",
-        "--logfile-path",
-        "-p",
-        envvar=f"{PREFIX}_LOGFILE_PATH",
-        show_envvar=False,
-    ),
-):
-    configure_logs(enable_logfile, logfile_path, debug)
-
-
-app = typer.Typer(callback=callback, rich_markup_mode="rich", add_completion=False)
-
-
-def run_keeper(
-    vault_dir,
-    comms_port,
-    app_name,
-    agent_ip,
-    polling_interval,
-    run_once,
-    log,
-):
-    from fluxvault import FluxKeeper
-
-    flux_keeper = FluxKeeper(
-        vault_dir=vault_dir,
-        comms_port=comms_port,
-        app_name=app_name,
-        agent_ips=agent_ip,
-    )
-
-    while True:
-        flux_keeper.poll_all_agents()
-        if run_once:
-            break
-        log.info(f"sleeping {polling_interval} seconds...")
-        time.sleep(polling_interval)
-
-
 @app.command()
 def keeper(
-    daemonize: bool = typer.Option(
-        False,
-        "--daemonize",
-        "-d",
-        envvar=f"{PREFIX}_DAEMONIZE",
-        show_envvar=False,
-        help="Run forever in background",
-    ),
     vault_dir: str = typer.Option(
         "vault",
         "--vault-dir",
@@ -141,31 +80,25 @@ def keeper(
         show_envvar=False,
     ),
 ):
-    if daemonize and run_once:
-        exit("\nIf daemonize set, run-once can't be set")
-
-    log = logging.getLogger("fluxvault")
 
     agent_ips = agent_ips.split(",")
     agent_ips = list(filter(None, agent_ips))
 
-    params = [
-        vault_dir,
-        comms_port,
-        app_name,
-        agent_ips,
-        polling_interval,
-        run_once,
-        log,
-    ]
+    flux_keeper = FluxKeeper(
+        vault_dir=vault_dir,
+        comms_port=comms_port,
+        app_name=app_name,
+        agent_ips=agent_ips,
+    )
 
-    streams = [x.stream for x in log.handlers]
+    log = logging.getLogger("fluxvault")
 
-    if daemonize:
-        with daemon.DaemonContext(files_preserve=streams):
-            run_keeper(*params)
-    else:
-        run_keeper(*params)
+    while True:
+        flux_keeper.poll_all_agents()
+        if run_once:
+            break
+        log.info(f"sleeping {polling_interval} seconds...")
+        time.sleep(polling_interval)
 
 
 @app.command()
@@ -183,14 +116,6 @@ def agent(
         "-p",
         envvar=f"{PREFIX}_BIND_PORT",
         show_envvar=False,
-    ),
-    daemonize: bool = typer.Option(
-        False,
-        "--daemonize",
-        "-d",
-        envvar=f"{PREFIX}_DAEMONIZE",
-        show_envvar=False,
-        help="Run forever in background",
     ),
     enable_local_fileserver: bool = typer.Option(
         False,
@@ -258,32 +183,6 @@ def agent(
         disable_authentication,
     ]
 
-    log = logging.getLogger("fluxvault")
-
-    streams = [x.stream for x in log.handlers]
-    out = open("outfile.txt", "w+")
-    if daemonize:
-        with daemon.DaemonContext(
-            working_directory="/tmp", files_preserve=streams, stderr=out
-        ):
-            run_agent(*params)
-
-    else:
-        run_agent(*params)
-
-
-def run_agent(
-    bind_address,
-    bind_port,
-    enable_local_fileserver,
-    local_fileserver_port,
-    manage_files,
-    working_dir,
-    whitelist_addresses,
-    disable_authentication,
-):
-    from fluxvault import FluxAgent
-
     agent = FluxAgent(
         bind_address=bind_address,
         bind_port=bind_port,
@@ -298,18 +197,32 @@ def run_agent(
     agent.run()
 
 
-# @app.callback()
-# def main():
-#     # from fluxvault.log import configure_logs
-#     configure_logs(True, "/tmp/melogs.log", False)
-#     print("in main")
-#     log = logging.getLogger("fluxvault")
-#     streams = [x.stream for x in log.handlers]
-
-#     with daemon.DaemonContext(files_preserve=streams):
-#         run_agent(
-#             "127.0.0.1", 8888, False, 7777, "quotes.txt", "/tmp", "127.0.0.1", False
-#         )
+@app.callback()
+def main(
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        envvar=f"{PREFIX}_DEBUG",
+        show_envvar=False,
+        help="Enable extra debug logging",
+    ),
+    enable_logfile: bool = typer.Option(
+        False,
+        "--log-to-file",
+        "-l",
+        envvar=f"{PREFIX}_ENABLE_LOGFILE",
+        show_envvar=False,
+        help="Turn on logging to file",
+    ),
+    logfile_path: str = typer.Option(
+        "/tmp/fluxvault.log",
+        "--logfile-path",
+        "-p",
+        envvar=f"{PREFIX}_LOGFILE_PATH",
+        show_envvar=False,
+    ),
+):
+    configure_logs(enable_logfile, logfile_path, debug)
 
 
 def entrypoint():

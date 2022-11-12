@@ -13,7 +13,7 @@ It is important that no one else has access to your secure environement - this i
 
 The `agent` runs in the background on the Fluxnode, waiting for the `keeper` to connect. The agent is either installed on your app component, or run as a companion component that will securely serve files to your other components.
 
-You then run the `agent` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a daemon. In daemon mode, the agent will run in the background and update nodes continuously. (Every 10 minutes by default)
+You then run the `agent` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a service in the background. The agent will run in the background and update nodes continuously. (Every 10 minutes by default)
 
 ---
 
@@ -33,7 +33,7 @@ THis will give you access to the `fluxvault` application.
 
 ### Agent
 
-Flux Vault can either be run as a companion component for your application, or you can integrate it into your existing application.
+Flux Vault agent can either be run as a companion component for your application, or you can integrate it into your existing application.
 
 ### Fluxvault - Integrate into your existing application
 
@@ -42,10 +42,10 @@ Running the agent:
 A simple agent setup would look like this: (see Agent section for more detailed explanation)
 
 ```
-fluxvault agent --daemonize --whitelist-addresses <your home ip> --manage-files secret_password.txt
+fluxvault agent --whitelist-addresses <your home ip> --manage-files secret_password.txt
 ```
 
-This will run the `agent` in the background, listening on port 8888, allowing the `keeper` access from your home ip address only. Once the `keeper` connects, the file `secret_password.txt` will end up in the agents working dir (`/tmp` by default) 
+This will run the `agent`, listening on port 8888, allowing the `keeper` access from your home ip address only. Once the `keeper` connects, the file `secret_password.txt` will end up in the agents working dir (`/tmp` by default) 
 
 It's then up to your application to make use of the `secret_password.txt` file.
 
@@ -56,7 +56,7 @@ FROM python:3.9-bullseye
 
 RUN pip install fluxvault
 
-RUN fluxvault agent --daemonize
+RUN fluxvault agent &
 
 EXPOSE 8888
 
@@ -68,14 +68,14 @@ Running the container:
 Every configuration option available for `fluxvault` can either be specified on the command line or via environment variables. If using env vars, all options are prefixed with `FLUXVAULT_`. For example, to start the container above we could do the following:
 
 ```
-FLUXVAULT_WHITELIST_ADDRESSES=<your ip> FLUXVAULT_MANAGE_FILES=secret_password.txt docker run -it yourrepo/container:latest
+FLUXVAULT_WHITELIST_ADDRESSES=<your ip>,<your other ip> FLUXVAULT_MANAGE_FILES=secret_password.txt docker run -it yourrepo/container:latest
 ```
 
 ### Fluxvault - running as a Companion component
 
 Add this container to your Flux application
 
-`megachips/fluxvault:latest`
+`megachips/fluxvault:latest` *TBD - update to runonflux
 
 Specify environement variables for configuration, at a minimum, you will need the following, see later sections for more info.
 
@@ -95,7 +95,13 @@ If the `keeper` has not delivered the files yet - the local fileserver will resp
 
 The Keeper is run in your secure environment. Local server or home computer.
 
-If you on a unix like system (ubuntu, OSX etc) You have the choice to run the `keeper` as either a daemon (in the background) or in the foreground. Windows - you will have to daemonize manually
+If you are on a unix like system (ubuntu, OSX etc) and want the `keeper` to run in the background, the easiest way is to use a process supervisor like systemd and create a service.
+
+Here is an example systemd service file:
+
+<file here>
+
+Windows has process supervisors and should work with Flux Vault, however they have not been tested.
 
 Choose a directory you want to use as your `vault` directory. For example, we will use /tmp/vault here.
 
@@ -127,7 +133,6 @@ All options are able to be passed as an environment variable. Just prefix the op
 
     * bind_address - the address the agent listens on. 0.0.0.0 by default.
     * bind_port - the port to listen on. 8888 by default.
-    * daemonize - if you want to run the agent in the background
     * enable_local_fileserver - for multicomponent apps. If you want to share the secret files to other components.
     * local_fileserver_port - the port to serve files on. 2080 by default.
     * manage_files - comma seperated string of files you want the keeper to provide to the application.
@@ -139,10 +144,15 @@ All options are able to be passed as an environment variable. Just prefix the op
 
 Same as the agent - all options work as environment variables
 
-    daemonize - if you want to run the keeper in the background
     vault_dir - the directory that contains your secret files. Default to ./vault 
     comms_port - what port to use to connect to agent. Default 8888
     app_name - the name of your flux application (the keeper will look up your app and get the agent ip addresses)
     polling_interval - how often to poll agents. Default 300 seconds
     run_once - If you don't want to poll agent and just run once
     agent_ips - development, if specified, will try to contact addresses specified only. App name is ignored.
+
+## Development
+
+Fluxvault is formatted using black and isort, and built with poetry.
+
+To contribute, clone this repo, then pip install poetry.

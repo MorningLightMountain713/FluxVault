@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import binascii
 import os
-import time
 import ipaddress
+import logging
 
 # 3rd party
 import aiofiles
@@ -52,6 +52,7 @@ class FluxAgent:
         self.app = web.Application()
         self.enable_local_fileserver = enable_local_fileserver
         self.extensions = extensions
+        self.log = self.get_logger()
         self.local_fileserver_port = local_fileserver_port
         self.loop = asyncio.get_event_loop()
         self.managed_files = managed_files
@@ -69,8 +70,8 @@ class FluxAgent:
         extensions.add_method(self.get_all_files_crc)
         extensions.add_method(self.write_files)
         extensions.add_method(self.get_methods)
-        extensions.add_method(self.run_entrypoint)
-        extensions.add_method(self.extract_tar)
+        # extensions.add_method(self.run_entrypoint)
+        # extensions.add_method(self.extract_tar)
 
         transport = EncryptedSocketServerTransport(
             bind_address,
@@ -82,6 +83,10 @@ class FluxAgent:
 
         self.app.router.add_get("/file/{file_name}", self.download_file)
 
+    def get_logger(self) -> logging.Logger:
+        """Gets a logger"""
+        return logging.getLogger("fluxvault")
+
     def test_workdir_access(self):
         """Minimal test to ensure we can at least read the working dir"""
         try:
@@ -92,7 +97,9 @@ class FluxAgent:
     def run(self):
         if self.enable_local_fileserver:
             self.loop.create_task(self.start_site(self.app, self.local_fileserver_port))
-            print(f"Local file server running on port {self.local_fileserver_port}")
+            self.log.info(
+                f"Local file server running on port {self.local_fileserver_port}"
+            )
         #  ToDo: this needs to be modified so it gets added to loop, then loop forever
         self.rpc_server.serve_forever()
 
@@ -114,6 +121,7 @@ class FluxAgent:
     async def download_file(self, request: web.Request) -> web.Response:
         # ToDo: Base downloads on component name
         # ToDo: Only auth once, not per request
+
         # We only accept connections from local network. (Protect against punter
         # exposing the fileserver port on the internet)
         if not ipaddress.ip_address(request.remote).is_private():
@@ -167,16 +175,18 @@ class FluxAgent:
 
                 crc = binascii.crc32(content)
         except FileNotFoundError:
-            print("file not found")
+            self.log.info(f"Local file {fname} not found")
             crc = 0
+        # ToDo: Fix this
         except Exception as e:
-            print(repr(e))
+            self.log.error(repr(e))
+            crc = 0
 
         return {"name": fname, "crc32": crc}
 
     async def get_all_files_crc(self) -> list:
         """Returns the crc32 for each file that is being managed"""
-        print("Returning all vault files CRCs")
+        self.log.info("Returning all vault file hashes")
         tasks = []
         for file in self.managed_files:
             tasks.append(self.loop.create_task(self.get_file_crc(file)))
@@ -210,15 +220,15 @@ class FluxAgent:
                 await file.write(data)
         # ToDo: whoa, tighten this up
         except Exception as e:
-            print(repr(e))
+            self.log.error(repr(e))
 
     async def write_files(self, files: dict):
         """Will write to disk any file provided, in the format {"name": <content>}"""
         # ToDo: this should be tasks
         for name, data in files.items():
-            print(f"Writing file {name}")
+            self.log.info(f"Writing file {name}")
             await self.write_file(name, data)
-            print("Writing complete")
+            self.log.info("Writing complete")
         self.ready_to_serve = True
 
     def extract_tar(self, file, target_dir):
@@ -231,8 +241,9 @@ class FluxAgent:
             tar = tarfile.open(file)
             tar.extractall(target_dir)
             tar.close()
+        # ToDo: Fix
         except Exception as e:
-            print(repr(e))
+            self.log.error(repr(e))
 
     async def run_entrypoint(self, entrypoint: str):
         # ToDo: don't use shell

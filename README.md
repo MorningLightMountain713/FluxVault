@@ -80,7 +80,9 @@ Add this container to your Flux application
 Specify environement variables for configuration, at a minimum, you will need the following, see later sections for more info.
 
 FLUXVAULT_WHITELIST_ADDRESSES - comma seperated list of ip addresses
+
 FLUXVAULT_MANAGE_FILES - comma seperated list of files you want delivered
+
 FLUXVAULT_FILESERVER - True, will enable the local http fileserver
 
 Your fluxvault component will now serve files locally to your other components via http. It validates the container names to ensure only your app gets served the secret files. It also ensures it only serves to private addresses in case you accidentally open the port to the public.

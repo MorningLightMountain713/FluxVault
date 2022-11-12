@@ -1,10 +1,10 @@
+import logging
+import time
+from typing import List, Optional
+
 import daemon  # python-daemon package
 import daemon.pidfile
 import typer
-import time
-import logging
-
-from typing import Optional, List
 
 # Still need to make this async safe + add dispatcher. Makes it an easier interface so
 # punters don't have to subclass FluxKeeper

@@ -1,11 +1,9 @@
-import typer
-
+import logging
 import time
 
-import logging
+import typer
 
-from fluxvault import FluxKeeper, FluxAgent
-
+from fluxvault import FluxAgent, FluxKeeper
 
 PREFIX = "FLUXVAULT"
 

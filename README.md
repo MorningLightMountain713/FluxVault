@@ -95,11 +95,26 @@ If the `keeper` has not delivered the files yet - the local fileserver will resp
 
 The Keeper is run in your secure environment. Local server or home computer.
 
-If you are on a unix like system (ubuntu, OSX etc) and want the `keeper` to run in the background, the easiest way is to use a process supervisor like systemd and create a service.
+If you are on a unix like system and want the `keeper` to run in the background, the easiest way is to use a process supervisor like systemd and create a service.
 
 Here is an example systemd service file:
 
-<file here>
+```
+[Unit]
+Description=Flux Vault
+
+[Service]
+ExecStart=/usr/local/bin/fluxvault keeper --vault-dir /tmp/vault --app-name <app name>
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Add the content to /etc/systemd/system/fluxvault.service
+
+reload systemd
+
+`sudo systemctl daemon-reload`
 
 Windows has process supervisors and should work with Flux Vault, however they have not been tested.
 
@@ -131,25 +146,25 @@ By default the `keeper` will connect every 10 minutes. This is configurable.
 
 All options are able to be passed as an environment variable. Just prefix the option name with FLUXVAULT_ (all option names in capitals)
 
-    * bind_address - the address the agent listens on. 0.0.0.0 by default.
-    * bind_port - the port to listen on. 8888 by default.
-    * enable_local_fileserver - for multicomponent apps. If you want to share the secret files to other components.
-    * local_fileserver_port - the port to serve files on. 2080 by default.
-    * manage_files - comma seperated string of files you want the keeper to provide to the application.
-    * working_dir - where the files will be stored locally.
-    * whitelist_addresses - comma seperated string of ip addresses that are allowed to talk to the agent. (your home ip address)
-    * disable_authentication - Development only - don't do this on a real app.
+  * bind_address - the address the agent listens on. 0.0.0.0 by default.
+  * bind_port - the port to listen on. 8888 by default.
+  * enable_local_fileserver - for multicomponent apps. If you want to share the secret files to other components.
+  * local_fileserver_port - the port to serve files on. 2080 by default.
+  * manage_files - comma seperated string of files you want the keeper to provide to the application.
+  * working_dir - where the files will be stored locally.
+  * whitelist_addresses - comma seperated string of ip addresses that are allowed to talk to the agent. (your home ip address)
+  * disable_authentication - Development only - don't do this on a real app.
 
 ### Keeper specific configuration options
 
 Same as the agent - all options work as environment variables
 
-    vault_dir - the directory that contains your secret files. Default to ./vault 
-    comms_port - what port to use to connect to agent. Default 8888
-    app_name - the name of your flux application (the keeper will look up your app and get the agent ip addresses)
-    polling_interval - how often to poll agents. Default 300 seconds
-    run_once - If you don't want to poll agent and just run once
-    agent_ips - development, if specified, will try to contact addresses specified only. App name is ignored.
+  * vault_dir - the directory that contains your secret files. Default to ./vault 
+  * comms_port - what port to use to connect to agent. Default 8888
+  * app_name - the name of your flux application (the keeper will look up your app and get the agent ip addresses)
+  * polling_interval - how often to poll agents. Default 300 seconds
+  * run_once - If you don't want to poll agent and just run once
+  * agent_ips - development, if specified, will try to contact addresses specified only. App name is ignored.
 
 ## Development
 

@@ -1,10 +1,11 @@
 # standard library
 from __future__ import annotations
+
 import asyncio
 import binascii
-import os
 import ipaddress
 import logging
+import os
 
 # 3rd party
 import aiofiles
@@ -13,9 +14,9 @@ from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
 
+from fluxvault.extensions import FluxVaultExtensions
 # this package
 from fluxvault.helpers import get_app_and_component_name
-from fluxvault.extensions import FluxVaultExtensions
 
 
 class FluxAgentException(Exception):

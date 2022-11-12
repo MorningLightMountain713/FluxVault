@@ -3,7 +3,6 @@ import asyncio
 import binascii
 import logging
 import time
-from enum import Enum
 from typing import Callable
 
 # 3rd party

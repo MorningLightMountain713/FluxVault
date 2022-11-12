@@ -1,10 +1,9 @@
 import asyncio
+import logging
 import time
 
 from fluxvault import FluxAgent
 from fluxvault.extensions import FluxVaultExtensions
-
-import logging
 
 vault_log = logging.getLogger("fluxvault")
 aiotinyrpc_log = logging.getLogger("aiotinyrpc")

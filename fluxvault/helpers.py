@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import socket
 
-import dns.resolver, dns.reversename
+import dns.resolver
+import dns.reversename
 
 
 def _get_own_ip():

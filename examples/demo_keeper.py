@@ -50,12 +50,12 @@ def run_keeper(
 ):
     from fluxvault import FluxKeeper
 
-    vault_log = logging.getLogger("flux_vault")
+    vault_log = logging.getLogger("fluxvault")
     aiotinyrpc_log = logging.getLogger("aiotinyrpc")
     level = logging.DEBUG if debug else logging.INFO
 
     formatter = logging.Formatter(
-        "%(asctime)s: %(name)s: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
+        "%(asctime)s: fluxvault: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
     )
 
     vault_log.setLevel(level)
@@ -69,6 +69,10 @@ def run_keeper(
     vault_log.addHandler(stream_handler)
     aiotinyrpc_log.addHandler(stream_handler)
 
+    if log_to_file:
+        aiotinyrpc_log.addHandler(file_handler)
+        vault_log.addHandler(file_handler)
+
     flux_keeper = FluxKeeper(
         vault_dir=vault_dir,
         comms_port=comms_port,
@@ -78,10 +82,6 @@ def run_keeper(
         debug=debug,
     )
 
-    # if log_to_file:
-    #     aiotinyrpc_log.addHandler(file_handler)
-    #     vault_log.addHandler(file_handler)
-
     while True:
         flux_keeper.poll_all_agents()
         if run_once:
@@ -90,19 +90,34 @@ def run_keeper(
         time.sleep(polling_interval)
 
 
+PREFIX = "FLUXVAULT"
+
+
 def main(
-    daemonize: bool = typer.Option(False, "--daemonize", "-d"),
-    vault_dir: str = typer.Option("vault", "--vault-dir", "-s"),
-    comms_port: int = typer.Option(8888, "--comms-port", "-p"),
-    app_name: str = typer.Option(None, "--app-name", "-a"),
-    log_to_file: bool = typer.Option(True, "--log-to-file", "-l"),
-    debug: bool = typer.Option(False, "--debug"),
-    polling_interval: int = typer.Option(300, "--polling-interval", "-i"),
-    run_once: bool = typer.Option(False, "--run-once", "-o"),
-    agent_ip: Optional[List[str]] = typer.Option(None),
+    daemonize: bool = typer.Option(
+        False, "--daemonize", "-d", envvar=f"{PREFIX}_DAEMONIZE"
+    ),
+    vault_dir: str = typer.Option(
+        "vault", "--vault-dir", "-s", envvar=f"{PREFIX}_VAULT_DIR"
+    ),
+    comms_port: int = typer.Option(
+        8888, "--comms-port", "-p", envvar=f"{PREFIX}_COMMS_PORT"
+    ),
+    app_name: str = typer.Option(None, "--app-name", "-a", envvar=f"{PREFIX}_APP_NAME"),
+    log_to_file: bool = typer.Option(
+        True, "--log-to-file", "-l", envvar=f"{PREFIX}_LOG_TO_FILE"
+    ),
+    debug: bool = typer.Option(False, "--debug", envvar=f"{PREFIX}_DEBUG"),
+    polling_interval: int = typer.Option(
+        300, "--polling-interval", "-i", envvar=f"{PREFIX}_POLLING_INTERVAL"
+    ),
+    run_once: bool = typer.Option(
+        False, "--run-once", "-o", envvar=f"{PREFIX}_RUN_ONCE"
+    ),
+    agent_ip: Optional[List[str]] = typer.Option(None, envvar=f"{PREFIX}_AGENT_IP"),
 ):
     if daemonize and run_once:
-        exit("If daemonize set, run-once can't be set")
+        exit("\nIf daemonize set, run-once can't be set")
 
     params = [
         vault_dir,

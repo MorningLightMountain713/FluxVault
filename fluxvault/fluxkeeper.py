@@ -36,40 +36,28 @@ class FluxKeeper:
         app_name: str = "",
         agent_ips: list = [],
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
-        log_to_file: bool = False,
-        log_file_name: str = "fluxvault_keeper.log",
-        debug: bool = False,
     ):
         self.app_name = app_name
         self.agent_ips = agent_ips if agent_ips else self.get_agent_ips()
         self.agents = {}
-        self.debug = debug
         self.extensions = extensions
-        self.log_file_name = log_file_name
-        self.log_to_file = log_to_file
         self.log = self.get_logger()
         self.loop = asyncio.get_event_loop()
         self.protocol = JSONRPCProtocol()
-        self.uncontactable_agents = []
         self.vault_dir = vault_dir
 
         for ip in self.agent_ips:
             transport = EncryptedSocketClientTransport(ip, comms_port)
 
-            if transport.connected():
-                rpc_client = RPCClient(self.protocol, transport)
-                flux_agent = rpc_client.get_proxy()
-                self.agents.update({ip: flux_agent})
-            else:
-                self.log.warn(f"Agent {ip}:{comms_port} uncontactable")
-                self.uncontactable_agents.append((ip, comms_port))
+            flux_agent = RPCClient(self.protocol, transport)
+            self.agents.update({ip: flux_agent})
 
         self.extensions.add_method(self.get_all_agents_methods)
         self.extensions.add_method(self.poll_all_agents)
 
     def get_logger(self) -> logging.Logger:
         """Gets a logger"""
-        return logging.getLogger("flux_vault")
+        return logging.getLogger("fluxvault")
 
     def get_agent_ips(self):
         url = f"https://api.runonflux.io/apps/location/{self.app_name}"
@@ -144,29 +132,56 @@ class FluxKeeper:
         each agent"""
         # Todo test multiple agents
         for agent in self.agents.values():
-            return agent.get_methods()
+            agent.transport.connect()
+
+            if not agent.transport.connected:
+                continue  # transport will log warning
+
+            agent_proxy = agent.get_proxy()
+            agent.transport.disconnect()
+
+            return agent_proxy.get_methods()
 
     def poll_all_agents(self):
+        # ToDo: async
         """Checks if agents need any files delivered securely"""
+        if not self.agent_ips:
+            self.log.info("No agents found... nothing to do")
+
         for address, agent in self.agents.items():
             self.log.debug(f"Contacting Agent {address} to check if files required")
+
+            agent.transport.connect()
+            if not agent.transport.connected:
+                self.log.info("Transport not connected... skipping.")
+                continue  # transport will log warning
+
+            agent_proxy = agent.get_proxy()
+
             files_to_write = {}
-            files = agent.get_all_files_crc()
+            files = agent_proxy.get_all_files_crc()
             self.log.debug(f"Agent {address} remote file CRCs: {files}")
+
+            if not files:
+                self.log.warn(f"Agent {address} didn't request any files... skipping!")
+                return
+
             for file in files:
                 match_data = self.compare_files(file)
                 self.log_file_match_details(file["name"], match_data)
                 if match_data["secret"]:
                     files_to_write.update({file["name"]: match_data["secret"]})
+
             if files_to_write:
-                agent.write_files(files=files_to_write)
+                agent_proxy.write_files(files=files_to_write)
+            agent.transport.disconnect()
 
     def log_file_match_details(self, file_name, match_data):
         if not match_data["file_found_locally"]:
             self.log.error(
                 f"Agent requested file {self.vault_dir}/{file_name} not found locally... skipping!"
             )
-        if match_data["remote_file_exists"] and match_data["secret"]:
+        elif match_data["remote_file_exists"] and match_data["secret"]:
             self.log.info(
                 f"Agent remote file {file_name} is different that local file... sending latest data"
             )
@@ -177,22 +192,11 @@ class FluxKeeper:
         elif match_data["secret"]:
             self.log.info(f"Agent requested new file {file_name}... sending")
 
-    def run_agent_entrypoint(self):
-        print(self.agents)
-        agent = self.agents["127.0.0.1"]
-        agent.one_way = True
-        agent.run_entrypoint("/app/entrypoint.sh")
-
-    def start(self, extensions):
-        # ToDo: finish this - cmd line script calls this
-        flux_keeper = FluxKeeper(
-            vault_dir="vault",
-            comms_port=8888,
-            agent_ips=["127.0.0.1"],
-            extensions=extensions,
-            log_to_file=True,
-            debug=False,
-        )
+    # def run_agent_entrypoint(self):
+    #     print(self.agents)
+    #     agent = self.agents["127.0.0.1"]
+    #     agent.one_way = True
+    #     agent.run_entrypoint("/app/entrypoint.sh")
 
     def __getattr__(self, name: str) -> Callable:
         try:

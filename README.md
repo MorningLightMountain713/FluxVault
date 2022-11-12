@@ -1,290 +1,148 @@
 # FluxVault
-Flux Vault - load private data into running container
+Flux Vault - load private data into a running container.
 
-The goal of this package is to provide a way to securely load passwords and private data
-into a running Flux application / container.
+This package provides a way to securely load passwords and private data into a running Flux application / container(s). All data passed into a container is encrypted, so no one can snoop on you data. However, data is not stored on disk encrypted. Please remember, the node owner still has root access to your container, and can access any files / data.
 
-vault.py defines two Classes FluxAgent and FluxNode an application can create a custom class
-which will allow configurating and also expanding the functionality.
+If you just want to have at it - please skip to the `quickstart` section below.
 
-The FluxNode runs on a Flux Node as a small server waiting for the FluxAgent to connect.
-The FluxAgent periodically connects to each of the nodes it supports to handle any
-requests the nodes may have.
+## How does it work?
 
-Presently the only action supported is requesting a file from the agent.
+Flux vault has two pieces - The `agent` that runs on a Fluxnode as part of your application, and the `keeper` that runs in your secure environment (usually your home computer or server).
 
-If a custom class is created additional actions can be added where the agent
-truely acts as an agent for the node, one example might be the node sending a CSR
-and the agent contacting letsencrypt to generate and return a certificate for the node.
+It is important that no one else has access to your secure environement - this is where your private data is located.
 
-In the demo use case the Agent is in a Home LAN and the Nodes are running on Flux
+The `agent` runs in the background on the Fluxnode, waiting for the `keeper` to connect. The agent is either installed on your app component, or run as a companion component that will securely serve files to your other components.
 
-The Node will only accept connections from a predefined IP or a host name, which could be controlled by dyn-dns
+You then run the `agent` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a daemon. In daemon mode, the agent will run in the background and update nodes continuously. (Every 10 minutes by default)
 
-The Agent will query FluxOS to determine what IP addresses are running the application the Agent supports.
-The Agent will connect to the nodes periodically to see if they need any files sent securely.
+---
 
-This is not designed to send large files, just simple configuration files and passwords
+## Quickstart
 
-The communication flow is as follows:
+Installation:
 
-1. Agent connects to Node on a predefined Application port.
-2. The Node will generate a RSA Key Pair and send the Public Key to the Agent.
-3. The Agent will use that Public Key to encrypt a message that contains an AES Key
-4. The Node will send a test message using the provided AES Key to the Agent
-5. If the Agent suceesfully decrypts the message it sends a Test Passed message, which is also encrypted.
-   (All further messages are encrypted with this AES Key)
-6. The Node will send Request a message for a named file
-7. The Agent will return the contents of that file if it is missing or has changed or an error status
+* Requires Python 3.9 or later
 
-Steps 6-7 repeat until the Node needs nothing else and sends a DONE message.
-Note: Steps 6-7 can be any defined action the Node needs the Agent to perform.
+```
+pip install fluxvault
+```
 
-At the socket level the messages are JSON strings terminated with Newline. Presently the maximum length of the JSON message is 8192, this could be increased but the data is limited to a single JSON structure.
+THis will give you access to the `fluxvault` application.
 
-It is a simple proof of concept that can clearly be improved as well as implemented in other langauges as needed.
+![fluxvault main](https://github.com/MorningLightMountain713/FluxVault/blob/master/fluxvault_main.png?raw=true)
 
-One big area of improvement is in step 2, it would be valuable if the Application could have the message containing the Public Key be signed by the Flux Node it is running on and then the Agent would have greater assurance the message was valid.
+### Agent
 
-# Dependencies
+Flux Vault can either be run as a companion component for your application, or you can integrate it into your existing application.
 
-The code was written to Python 3
+### Fluxvault - Integrate into your existing application
 
-It uses the following python libraries
+Running the agent:
 
-from Crypto.PublicKey import RSA  
-from Crypto.Random import get_random_bytes  
-from Crypto.Cipher import AES, PKCS1_OAEP  
-import binascii  
-import json  
-import sys  
-import os  
-import time  
+A simple agent setup would look like this: (see Agent section for more detailed explanation)
 
-Crypto is obtained from the pycryptodome library, installed with 
+```
+fluxvault agent --daemonize --whitelist-addresses <your home ip> --manage-files secret_password.txt
+```
 
-pip3 install pycryptodome
+This will run the `agent` in the background, listening on port 8888, allowing the `keeper` access from your home ip address only. Once the `keeper` connects, the file `secret_password.txt` will end up in the agents working dir (`/tmp` by default) 
 
-The rest are standard python libraries
+It's then up to your application to make use of the `secret_password.txt` file.
 
-# Installation
+A simple Dockerfile might look like this:
 
-Both Ubuntu Desktop 20.04 and 22.04 have python3 preinstalled.
-Installing pycryptodome needs pip3 also installed which can be done with this command:
+```
+FROM python:3.9-bullseye
 
-sudo apt install python3-pip
+RUN pip install fluxvault
 
-You can then run
+RUN fluxvault agent --daemonize
 
-pip3 install pycryptodome
+EXPOSE 8888
 
-You will likely need git to checkout the code (required to run the demo)
+CMD ["your app stuff"]
+```
 
-sudo apt install git
-git clone https://github.com/RunOnFlux/FluxVault.git
+Running the container:
 
-Install python library
+Every configuration option available for `fluxvault` can either be specified on the command line or via environment variables. If using env vars, all options are prefixed with `FLUXVAULT_`. For example, to start the container above we could do the following:
 
-pip3 install ./FluxVault
+```
+FLUXVAULT_WHITELIST_ADDRESSES=<your ip> FLUXVAULT_MANAGE_FILES=secret_password.txt docker run -it yourrepo/container:latest
+```
 
-(When beta testing is complete this library will be deployed as a python package and installed with 'pip3 install fluxvault')
+### Fluxvault - running as a Companion component
 
-Windows
+Add this container to your Flux application
 
-TODO
+`megachips/fluxvault:latest`
 
-Flux Node
+Specify environement variables for configuration, at a minimum, you will need the following, see later sections for more info.
 
-Typically the Agent will be running on a Desktop and the Node will be on a Flux Node.
-You will need to include the code in your docker image
+FLUXVAULT_WHITELIST_ADDRESSES - comma seperated list of ip addresses
+FLUXVAULT_MANAGE_FILES - comma seperated list of files you want delivered
+FLUXVAULT_FILESERVER - True, will enable the local http fileserver
 
-In application I used alpine:3.15 and the commands to add python3 to docker are
+Your fluxvault component will now serve files locally to your other components via http. It validates the container names to ensure only your app gets served the secret files. It also ensures it only serves to private addresses in case you accidentally open the port to the public.
 
-# Python
-
-ENV PYTHONUNBUFFERED=1  
-RUN apk add --update --no-cache python3 && ln -sf python3 /usr/bin/python  
-RUN python3 -m ensurepip  
-RUN pip3 install --no-cache --upgrade pip setuptools  
-RUN apk add gcc g++ make libffi-dev openssl-dev git  
-RUN pip3 install pycryptodome  
-RUN pip3 install requests  
-
-
-TODO
-
-So far the code has only been run on Ubuntu systems, it should easily run under WSL.
-Python is very portable, there should not be any reason it would not run on Windows or Mac directly.
-
-# Demo - localhost
-
-There are two demo files vault_agent.py and vault_node.py that can be used to demonstrate the sending of secrets.
+```
+curl flux<component_name>_<app_name>:2080/files/<managed file>
+```
 
-1) Clone the repo to a local directory
-2) Open two terminal windows in that same location
-3) By default vault_node.ps will create a temp folder in /tmp/node This is where files will be written/updated
-4) Inspect the two scripts, they have a MyFluxNode/MyFluxAgent class that defines all the configuration for the demo ("EDIT ME")
-5) In one terminal start the Node server "python3 ./vault_node.py" This starts a server on "The Node"
-6) In the other terminal run the Agent "python3 ./vault_agent.py --ip 127.0.0.1" The Agent will contact the Node at the IP given
+If the `keeper` has not delivered the files yet - the local fileserver will respond with a `503 - service unavailable` HTTP response.
 
-If you edit or delete one of the files in /tmp/node and re-run vault_agent (step 6) the file will be re-sent.
+### Keeper
 
-The Agent will run once and exit, if the --ip is left off then the vault_agent.py code looks for named Flux Application
-and contacts the Node server running on each active instance of the named application. The script defaults to VaultDemo
+The Keeper is run in your secure environment. Local server or home computer.
 
-In my use case I run the Agent once an hour, in a custom vault_agent.py the it could check the Flux App list every 5 or 10 minutes
-and then contact new nodes right away and other nodes at a slower rate.
+If you on a unix like system (ubuntu, OSX etc) You have the choice to run the `keeper` as either a daemon (in the background) or in the foreground. Windows - you will have to daemonize manually
 
-The vault_node.py code uses a python ThreadedServer to wait for connections, a custom implementation could do something totally
-different, possibly adding the calls to an existing application.
+Choose a directory you want to use as your `vault` directory. For example, we will use /tmp/vault here.
 
-## Result Output - Node
+Add your secret password file to the /tmp/vault directory.
 
-tom@node:/Git/FluxVault$ python3 ./vault_node.py  
-Running in Demo Mode files will be placed in  /tmp/node/  
-/tmp/node/  exists  
-node_server  localhost  
-The NodeKeyClient server is running on port 39898  
-Connected: ('127.0.0.1', 49096) on Thread-1 (process_request_thread)  
-quotes.txt  received!  
-readme.txt  received!  
-Closed: ('127.0.0.1', 49096) on Thread-1 (process_request_thread)  
-
-## Result Output - Agent
-
-tom@node:/Git/FluxVault$ python3 ./vault_agent.py --ip 127.0.0.1  
-Oct-15-2022 07:50:46 File quotes.txt sent!  
-Oct-15-2022 07:50:46 File readme.txt sent!  
-127.0.0.1 Completed  
-tom@node:/Git/FluxVault$   
-
-# Demo - Local Docker
-
-You can create a demo docker image by using my docker files:
-
-You will need to change 192.168.X.Y to match your local machine IP address
-
-docker run --name vault_demo --memory="1g" --cpus="1.0" -p 39289:39289 -e VAULT_PORT=39289 -e VAULT_NAME='192.168.X.Y' w2vy/vault_demo
-
-You should see the start of the output given below.
-
-Once the docker is running you can the run docker_demo.sh providing your local IP Addree
-
-./docker_demo.sh 192.168.X.Y
-
-## Result Output - Node
-
-tom@node:/Git/FluxVault$ docker run --name vault_demo --memory=1g --cpus=1.0 -p 39289:39289 -e VAULT_PORT=39289 -e VAULT_NAME=192.168.0.123 w2vy/vault_demo  
-Version 0.5 10/12/2022 p1test Vault 192.168.0.123 Port 39289  
-2022/10/15 12:07:09 [notice] 7#7: using the "epoll" event method  
-2022/10/15 12:07:09 [notice] 7#7: nginx/1.23.1  
-2022/10/15 12:07:09 [notice] 7#7: built by gcc 11.2.1 20220219 (Alpine 11.2.1_git20220219)  
-2022/10/15 12:07:09 [notice] 7#7: OS: Linux 5.15.0-48-generic  
-2022/10/15 12:07:09 [notice] 7#7: getrlimit(RLIMIT_NOFILE): 1048576:1048576  
-2022/10/15 12:07:09 [notice] 8#8: start worker processes  
-2022/10/15 12:07:09 [notice] 8#8: start worker process 9  
-2022/10/15 12:07:09 [notice] 8#8: start worker process 10  
-2022/10/15 12:07:09 [notice] 8#8: start worker process 11  
-2022/10/15 12:07:09 [notice] 8#8: start worker process 13  
-Cloning into 'FluxVault'...  
-branch 'python_class' set up to track 'origin/python_class'.  
-Switched to a new branch 'python_class'  
-Processing ./FluxVault  
-  Preparing metadata (setup.py): started  
-  Preparing metadata (setup.py): finished with status 'done'  
-Requirement already satisfied: pycryptodome in /usr/lib/python3.10/site-packages (from fluxvault==1.0) (3.15.0)  
-Using legacy 'setup.py install' for fluxvault, since package 'wheel' is not installed.  
-Installing collected packages: fluxvault  
-  Running setup.py install for fluxvault: started  
-  Running setup.py install for fluxvault: finished with status 'done'  
-Successfully installed fluxvault-1.0  
-WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv  
-Creating  /tmp/node/  
-node_server  192.168.0.123  
-The NodeKeyClient server is running on port 39289  
-Connected: ('192.168.0.123', 39736) on Thread-1 (process_request_thread)  
-quotes.txt  received!  
-readme.txt  received!  
-Closed: ('192.168.0.123', 39736) on Thread-1 (process_request_thread)  
-
-## Result Output - Agent
-
-tom@node:/Git/FluxVault$ ./docker_demo.sh 192.168.0.123  
-File quotes.txt Matched!  
-File readme.txt Matched!  
-192.168.0.123 Completed  
-tom@node:/Git/FluxVault$   
-
-
-# Demo - Flux Node
-
-Since I already have w2vy/vault_demo published and whitellisted in Flux you can simply deploy the same exact demo as a Flux dApp!
-
-In the above docker run command you can see parameters for setting the Container Name, Memory Size, CPU requirements, Port Mapping and Environment variables.
-
-These are all the things you need to know to deploy a Flux dApp, along with the docker image name.
-
-
-To deploy your own demo if the Vault you can visit https://jetpack2.app.runonflux.io/ and follow the steps:
-1) Login with Zelcore
-2) Click Launch
-3) Fill in 'App name' (Must be unique) and 'Description', Click 'Next Step'
-4) Fill in 'Component Name' (ie 'vault'), 'Docker Hub Repository for Component', must be 'w2vy/vault_demo:latest'
-5) The 'Add Environment Variables' section is where we can customize the dApp settings, typically you will see NAME=VALUE, in this form there is one field for the NAME and another for VALUE and then we click 'Add' for each one.
-   Set the following variables:  
-   VAULT_NAME=IP-or-HOST  
-   VAULT_PORT=YOUR-PORT2  
-   VAULT_FILE_DIR=/usr/share/nginx/html/  
-
-   Replace IP-or-HOST with your public IP Address (see http://whatismyip.com) or your DNS name, if you have one you will know it
-   Replace YOUR-PORT with any port number between 31000 and 39999
-
-   The demo uses 2 ports. The first port will be for the demo web server and the second port (YOUR-PORT2) the port that the Vault Agent will use to talk to the Vault Node.
-6) 'Add Run Command', must be '/home/apptest/entrypoint.sh', Click 'Add'
-7) Click 'Next Step'
-8) 'Port Forwarding", 'Flux Public Port', Enter PORT1 and 'Docker Component Port' Enter 80 click 'Add'
-9) Also enter PORT2 and PORT2 and 'Add' and 'Next Step' (You can skip Custom Domain)
-10) 'How many instances will you be running?' 3 is the minimum.  
-    'How many cores do you require?' It works slowly with 0.1 core, for the demo I used 0.5  
-    'How much memory will your app need?' It defaults to 1000MB, I have used 500MB  
-    'How much storage would you like?' The default of 1GB is fine  
-11) Review the estimated cost - $0.14
-12) Next Step you can review all the settings and deploy and pay.
-13) The dApp takes an hour to deploy into the network
-14) Once this dApp is running it will show a default web page that looks like this:
- 
-Welcome to nginx!  
-If you see this page, the nginx web server is successfully installed and working. Further configuration is required.  
-  
-For online documentation and support please refer to nginx.org.  
-Commercial support is available at nginx.com.  
-  
-Thank you for using nginx.  
-
-15) You can modify app_demo.sh to include the environment variables from step 5, the 'export' command is needed as shown
-16) You can then run the script to contact each node and load a different web page
-17) Reload the web page and you will see a page like this:
-
-Flux Node Rank  
-Node IP   
-  
-Queue Position	  
-Time to Front  
-
-# Customization
-
-The sequence of defines actions is as follows:
-
-1) The Agent connects to a Node and sets up a secure connection
-2) The Node runs FluxNode.agent_action which processes any response from the Agent and then calls FluxNode.user_request
-3) FluxNode.user_request gets called with a step counter and the custom code can invoke FluxNode.request_file or any request function added in MyFluxNode
-4) The request function formatted and encrypted a request that is sent to the Agent
-5) The Agent receives the request and uses the 'State' field of the message to lookup the function to handle the request
-6) The function can be FluxAgent.node_request or any function defined in MyFluxAgent and added to MyFluxAgent.agent_action
-7) The agent_action function processes the request and sends the response to the Node which brings us back to #2 above
-8) When the Node has completed all the requests, it sends the 'DONE' action which will signal the Agent to disconnect
-
-# TODO
-
-- Write code to periodically poll FluxOs for a list of nodes and see if aany need config
-- Explore a Windows GUI solution, right now it is command line only (Only tested on Ubuntu)
+```
+echo "supersecretpassword123" > /tmp/vault/secret_passwords.txt
+```
+
+Start the `keeper` and connect to all agents.
+
+```
+fluxvault keeper --vault-dir /tmp/vault --app-name <your-app-name>
+```
+
+The keeper will now connect to all agents and deliver any requested files!
+
+By default the `keeper` will connect every 10 minutes. This is configurable.
+
+### Global configuration options
+
+  * log_to_file - True. Enables file logging.
+  * logfile_path - the full path of where you want the logfile. By default logs to current directory `fluxvault.log`
+  * debug - shows extra debug logging. Be aware - this will decrypt messages and print to log file.
+
+### Agent specific configuration options
+
+All options are able to be passed as an environment variable. Just prefix the option name with FLUXVAULT_ (all option names in capitals)
+
+    * bind_address - the address the agent listens on. 0.0.0.0 by default.
+    * bind_port - the port to listen on. 8888 by default.
+    * daemonize - if you want to run the agent in the background
+    * enable_local_fileserver - for multicomponent apps. If you want to share the secret files to other components.
+    * local_fileserver_port - the port to serve files on. 2080 by default.
+    * manage_files - comma seperated string of files you want the keeper to provide to the application.
+    * working_dir - where the files will be stored locally.
+    * whitelist_addresses - comma seperated string of ip addresses that are allowed to talk to the agent. (your home ip address)
+    * disable_authentication - Development only - don't do this on a real app.
+
+### Keeper specific configuration options
+
+Same as the agent - all options work as environment variables
+
+    daemonize - if you want to run the keeper in the background
+    vault_dir - the directory that contains your secret files. Default to ./vault 
+    comms_port - what port to use to connect to agent. Default 8888
+    app_name - the name of your flux application (the keeper will look up your app and get the agent ip addresses)
+    polling_interval - how often to poll agents. Default 300 seconds
+    run_once - If you don't want to poll agent and just run once
+    agent_ips - development, if specified, will try to contact addresses specified only. App name is ignored.

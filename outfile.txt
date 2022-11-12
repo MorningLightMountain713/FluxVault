@@ -1,0 +1,8 @@
+2022-11-12 13:02:03: fluxvault: INFO: Serving on ('0.0.0.0', 8888)
+2022-11-12 13:02:07: fluxvault: INFO: Peer connected: ('127.0.0.1', 52436)
+2022-11-12 13:02:08: fluxvault: INFO: Socket is encrypted: True
+2022-11-12 13:07:08: fluxvault: INFO: Peer connected: ('127.0.0.1', 52685)
+2022-11-12 13:07:08: fluxvault: INFO: Socket is encrypted: True
+2022-11-12 13:12:08: fluxvault: INFO: Peer connected: ('127.0.0.1', 52932)
+2022-11-12 13:12:09: fluxvault: INFO: Socket is encrypted: True
+Terminating on signal 15

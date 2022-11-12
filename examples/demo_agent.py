@@ -6,12 +6,12 @@ from fluxvault.extensions import FluxVaultExtensions
 
 import logging
 
-vault_log = logging.getLogger("flux_vault")
+vault_log = logging.getLogger("fluxvault")
 aiotinyrpc_log = logging.getLogger("aiotinyrpc")
 level = logging.DEBUG
 
 formatter = logging.Formatter(
-    "%(asctime)s: %(name)s: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
+    "%(asctime)s: fluxvault: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
 )
 
 vault_log.setLevel(level)

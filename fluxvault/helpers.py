@@ -1,23 +1,25 @@
+from __future__ import annotations
+
 import socket
 
 import dns.resolver, dns.reversename
 
 
-def get_ip():
+def _get_own_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(0)
     try:
         # doesn't have to be reachable
         s.connect(("10.254.254.254", 1))
-        IP = s.getsockname()[0]
+        ip = s.getsockname()[0]
     except Exception:
-        IP = "127.0.0.1"
+        ip = "127.0.0.1"
     finally:
         s.close()
-    return IP
+    return ip
 
 
-def get_ptr(ip: str) -> str:
+def _get_ptr(ip: str) -> str:
     canonical = dns.reversename.from_address(ip)
     resolver = dns.resolver.Resolver()
     try:
@@ -28,13 +30,24 @@ def get_ptr(ip: str) -> str:
         return answer[0].to_text()
 
 
-def parse_ptr_to_names(ptr) -> dict:
+def _parse_ptr_to_names(ptr: str) -> list:
     # The ptr record contains the fqdn - hostname.networkname
+    if not ptr:
+        return ["", ""]
+
     fqdn = ptr.split(".")
     fqdn = list(filter(None, fqdn))
+    print(fqdn)
     host = fqdn[0]
     host = host.lstrip("flux")
     host = host.split("_")
     component_name = host[0]
     app_name = host[1]
-    return {"component_name": component_name, "app_name": app_name}
+    return [component_name, app_name]
+
+
+def get_app_and_component_name(_ip: str | None = None) -> list:
+    """Gets the component and app name for a given ip. If no ip is given, gets our own details"""
+    ip = _ip if _ip else _get_own_ip()
+    ptr = _get_ptr(ip)
+    return _parse_ptr_to_names(ptr)

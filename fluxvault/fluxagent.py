@@ -4,6 +4,7 @@ import asyncio
 import binascii
 import os
 import time
+import ipaddress
 
 # 3rd party
 import aiofiles
@@ -13,6 +14,7 @@ from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
 
 # this package
+from fluxvault.helpers import get_app_and_component_name
 from fluxvault.extensions import FluxVaultExtensions
 
 
@@ -60,7 +62,9 @@ class FluxAgent:
         self.test_workdir_access()
 
         if authenticate_vault and not whitelisted_addresses:
-            raise ValueError("whitelisted addresse(s) required if authenticating vault")
+            raise ValueError("whitelisted address(es) required")
+
+        self.component_name, self.app_name = get_app_and_component_name()
 
         extensions.add_method(self.get_all_files_crc)
         extensions.add_method(self.write_files)
@@ -79,8 +83,7 @@ class FluxAgent:
         self.app.router.add_get("/file/{file_name}", self.download_file)
 
     def test_workdir_access(self):
-        """Minimal test to ensure we can at least read the working dir, could expand on
-        this in future"""
+        """Minimal test to ensure we can at least read the working dir"""
         try:
             os.listdir(self.working_dir)
         except Exception as e:
@@ -109,6 +112,21 @@ class FluxAgent:
         await site.start()
 
     async def download_file(self, request: web.Request) -> web.Response:
+        # ToDo: Base downloads on component name
+        # ToDo: Only auth once, not per request
+        # We only accept connections from local network. (Protect against punter
+        # exposing the fileserver port on the internet)
+        if not ipaddress.ip_address(request.remote).is_private():
+            return web.Response(
+                body="Unauthorized",
+                status=403,
+            )
+        remote_component, remote_app = get_app_and_component_name(request.remote)
+        if remote_app != self.app_name:
+            return web.Response(
+                body="Unauthorized",
+                status=403,
+            )
         if not self.ready_to_serve:
             return web.Response(
                 body="Service unavailable - waiting for Keeper to connect",
@@ -201,6 +219,7 @@ class FluxAgent:
             print(f"Writing file {name}")
             await self.write_file(name, data)
             print("Writing complete")
+        self.ready_to_serve = True
 
     def extract_tar(self, file, target_dir):
         import tarfile

@@ -13,7 +13,7 @@ It is important that no one else has access to your secure environement - this i
 
 The `agent` runs in the background on the Fluxnode, waiting for the `keeper` to connect. The agent is either installed on your app component, or run as a companion component that will securely serve files to your other components.
 
-You then run the `agent` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a service in the background. The agent will run in the background and update nodes continuously. (Every 10 minutes by default)
+You then run the `keeper` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a service in the background. The agent will run in the background and update nodes continuously. (Every 10 minutes by default)
 
 ---
 
@@ -167,6 +167,53 @@ Same as the agent - all options work as environment variables
   * polling_interval - how often to poll agents. Default 300 seconds
   * run_once - If you don't want to poll agent and just run once
   * agent_ips - development, if specified, will try to contact addresses specified only. App name is ignored.
+
+## Using the fluxvault library in your application
+
+If your application is written in Python, you may want to import the fluxvault library directly and use this in your applcation.
+
+* Note, below demo shows all optional defaults
+
+Here is a demo of how you may do that:
+```
+from fluxvault import Agent
+
+  agent = FluxAgent(
+      managed_files=["secret_password.txt"],
+      working_dir="/app/passwords",
+      whitelisted_addresses=["your keeper ip address"],
+  )
+
+  agent.run()
+```
+
+OR if you want to run asynchronously:
+
+```
+import asyncio
+from fluxvault import Agent
+
+  agent = FluxAgent(
+      managed_files=["secret_password.txt"],
+      working_dir="/app/passwords",
+      whitelisted_addresses=["your keeper ip address"],
+      manage_loop = False,
+  )
+
+  loop = asyncio.get_event_loop()
+  loop.create_task(agent.run())
+
+  try:
+    loop.run_forever()
+  finally:
+    ...
+    # Do exit stuff
+
+```
+
+### Extending the fluxvault library
+
+Flux Vault offers an easy way of extending 
 
 ## Development
 

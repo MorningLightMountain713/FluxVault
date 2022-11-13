@@ -170,17 +170,6 @@ def agent(
     manage_files = manage_files.split(",")
     manage_files = list(filter(None, manage_files))
 
-    params = [
-        bind_address,
-        bind_port,
-        enable_local_fileserver,
-        local_fileserver_port,
-        manage_files,
-        working_dir,
-        whitelist_addresses,
-        disable_authentication,
-    ]
-
     agent = FluxAgent(
         bind_address=bind_address,
         bind_port=bind_port,
@@ -224,6 +213,7 @@ def main(
 
 
 def entrypoint():
+    """Called by console script"""
     app()
 
 

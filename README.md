@@ -172,8 +172,6 @@ Same as the agent - all options work as environment variables
 
 If your application is written in Python, you may want to import the fluxvault library directly and use this in your applcation.
 
-* Note, below demo shows all optional defaults
-
 Here is a demo of how you may do that:
 ```
 from fluxvault import Agent
@@ -191,29 +189,23 @@ OR if you want to run asynchronously:
 
 ```
 import asyncio
-from fluxvault import Agent
+from fluxvault import FluxAgent
 
-  agent = FluxAgent(
-      managed_files=["secret_password.txt"],
-      working_dir="/app/passwords",
-      whitelisted_addresses=["your keeper ip address"],
-      manage_loop = False,
-  )
+agent = FluxAgent(
+    managed_files=["secret_password.txt"],
+    working_dir="/tmp",
+    whitelisted_addresses=["your keeper ip address"],
+)
 
-  loop = asyncio.get_event_loop()
-  loop.create_task(agent.run())
+loop = asyncio.get_event_loop()
+loop.create_task(agent.run_async())
 
-  try:
+try:
     loop.run_forever()
-  finally:
-    ...
-    # Do exit stuff
+finally:
+    agent.cleanup()
 
 ```
-
-### Extending the fluxvault library
-
-Flux Vault offers an easy way of extending 
 
 ## Development
 

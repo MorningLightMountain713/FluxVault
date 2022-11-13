@@ -126,20 +126,23 @@ class FluxKeeper:
         """Returns methods available for the keeper to call"""
         return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
 
-    def get_all_agents_methods(self):
+    def get_all_agents_methods(self) -> dict:
         """Queries every agent and returns a list describing what methods can be run on
         each agent"""
         # Todo test multiple agents
-        for agent in self.agents.values():
+        all_methods = {}
+        for address, agent in self.agents.items():
             agent.transport.connect()
 
             if not agent.transport.connected:
                 continue  # transport will log warning
 
             agent_proxy = agent.get_proxy()
+            methods = agent_proxy.get_methods()
             agent.transport.disconnect()
+            all_methods.update({address: methods})
 
-            return agent_proxy.get_methods()
+        return all_methods
 
     def poll_all_agents(self):
         # ToDo: async

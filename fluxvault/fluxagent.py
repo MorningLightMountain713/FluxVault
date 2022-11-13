@@ -15,6 +15,7 @@ from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
 
 from fluxvault.extensions import FluxVaultExtensions
+
 # this package
 from fluxvault.helpers import get_app_and_component_name
 
@@ -49,7 +50,6 @@ class FluxAgent:
         working_dir: str = "/tmp",
         whitelisted_addresses: list = ["127.0.0.1"],
         authenticate_vault: bool = True,
-        manage_loop: bool = True,
     ):
         self.app = web.Application()
         self.enable_local_fileserver = enable_local_fileserver
@@ -57,7 +57,6 @@ class FluxAgent:
         self.log = self.get_logger()
         self.local_fileserver_port = local_fileserver_port
         self.loop = asyncio.get_event_loop()
-        self.manage_loop = manage_loop
         self.managed_files = managed_files
         self.ready_to_serve = False
         self.runners = []
@@ -106,12 +105,25 @@ class FluxAgent:
 
         self.loop.create_task(self.rpc_server.serve_forever())
 
-        if self.manage_loop:
-            try:
-                self.loop.run_forever()
-            finally:
-                for runner in self.runners:
-                    self.loop.run_until_complete(runner.cleanup())
+        try:
+            self.loop.run_forever()
+        finally:
+            for runner in self.runners:
+                self.loop.run_until_complete(runner.cleanup())
+
+    async def run_async(self):
+        if self.enable_local_fileserver:
+            self.loop.create_task(self.start_site(self.app, self.local_fileserver_port))
+            self.log.info(
+                f"Local file server running on port {self.local_fileserver_port}"
+            )
+
+        self.loop.create_task(self.rpc_server.serve_forever())
+
+    def cleanup(self):
+        # ToDo: look at cleanup for rpc server too
+        for runner in self.runners:
+            self.loop.run_until_complete(runner.cleanup())
 
     async def start_site(
         self, app: web.Application, address: str = "0.0.0.0", port: int = 2080

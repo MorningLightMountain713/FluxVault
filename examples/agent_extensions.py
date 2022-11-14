@@ -1,3 +1,7 @@
+"""Example showing how to add extra methods to the agent - these can all be called
+from the keeper
+"""
+
 import asyncio
 import time
 
@@ -5,7 +9,7 @@ from fluxvault import FluxAgent
 from fluxvault.extensions import FluxVaultExtensions
 
 # the extension allows these functions to be called from the remote end, to see
-# what functions are available on the remote end call get_methods (from the keeper)
+# what functions are available on the remote end call get_all_agent_methods (from the keeper)
 extensions = FluxVaultExtensions()
 
 # this will run on the main loop as it's async (preferred), works with any async

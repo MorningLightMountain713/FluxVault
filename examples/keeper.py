@@ -1,3 +1,5 @@
+"""Example showing how to run the keeper and check if they need any files"""
+
 import logging
 import time
 

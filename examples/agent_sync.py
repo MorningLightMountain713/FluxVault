@@ -1,6 +1,5 @@
 """Simple example with logging of running fluxagent synchronously"""
 
-import asyncio
 from fluxvault import FluxAgent
 import logging
 

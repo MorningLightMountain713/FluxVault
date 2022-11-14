@@ -1,3 +1,5 @@
+"""Example showing how to see what methods the agents have available"""
+
 import json
 
 from fluxvault import FluxKeeper, FluxVaultExtensions

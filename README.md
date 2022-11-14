@@ -174,7 +174,7 @@ If your application is written in Python, you may want to import the fluxvault l
 
 Here is a demo of how you may do that:
 ```
-from fluxvault import Agent
+from fluxvault import FluxAgent
 
   agent = FluxAgent(
       managed_files=["secret_password.txt"],

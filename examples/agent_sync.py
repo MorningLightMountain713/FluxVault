@@ -1,7 +1,8 @@
 """Simple example with logging of running fluxagent synchronously"""
 
-from fluxvault import FluxAgent
 import logging
+
+from fluxvault import FluxAgent
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)

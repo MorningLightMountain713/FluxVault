@@ -68,7 +68,7 @@ Running the container:
 Every configuration option available for `fluxvault` can either be specified on the command line or via environment variables. If using env vars, all options are prefixed with `FLUXVAULT_`. For example, to start the container above we could do the following:
 
 ```
-FLUXVAULT_WHITELIST_ADDRESSES=<your ip>,<your other ip> FLUXVAULT_MANAGE_FILES=secret_password.txt docker run -it yourrepo/container:latest
+ docker run -e FLUXVAULT_WHITELIST_ADDRESSES=<your ip>,<your other ip> -e FLUXVAULT_MANAGE_FILES=secret_password.txt -it yourrepo/container:latest
 ```
 
 ### Fluxvault - running as a Companion component

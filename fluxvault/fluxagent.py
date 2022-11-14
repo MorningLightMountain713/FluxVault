@@ -15,7 +15,6 @@ from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
 
 from fluxvault.extensions import FluxVaultExtensions
-
 # this package
 from fluxvault.helpers import get_app_and_component_name
 

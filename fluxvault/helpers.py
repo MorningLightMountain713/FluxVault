@@ -38,7 +38,6 @@ def _parse_ptr_to_names(ptr: str) -> list:
 
     fqdn = ptr.split(".")
     fqdn = list(filter(None, fqdn))
-    print(fqdn)
     host = fqdn[0]
     host = host.lstrip("flux")
     host = host.split("_")

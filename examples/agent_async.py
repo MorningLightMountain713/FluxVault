@@ -1,8 +1,9 @@
 """Simple example with logging of running fluxagent asynchronously"""
 
 import asyncio
-from fluxvault import FluxAgent
 import logging
+
+from fluxvault import FluxAgent
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)

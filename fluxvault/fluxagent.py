@@ -98,7 +98,9 @@ class FluxAgent:
 
     def run(self):
         if self.enable_local_fileserver:
-            self.loop.create_task(self.start_site(self.app, self.local_fileserver_port))
+            self.loop.create_task(
+                self.start_site(self.app, port=self.local_fileserver_port)
+            )
             self.log.info(
                 f"Local file server running on port {self.local_fileserver_port}"
             )

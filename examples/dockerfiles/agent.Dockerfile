@@ -13,6 +13,11 @@
 # Depending on your platform, if you're running this in development locally, your keeper address can change.
 # Just let it error and update the whitelisted address
 
+# Once the container is running, browse to http://localhost:8080
+
+# Then run the keeper in another console (if you have it installed), or fire up the
+# example keeper docker image
+
 FROM python:3.9-bullseye
 
 RUN pip install fluxvault

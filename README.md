@@ -42,7 +42,7 @@ Running the agent:
 A simple agent setup would look like this: (see Agent section for more detailed explanation)
 
 ```
-fluxvault agent --whitelist-addresses <your home ip> --manage-files secret_password.txt
+fluxvault agent --whitelisted-addresses <your home ip> --managed-files secret_password.txt
 ```
 
 This will run the `agent`, listening on port 8888, allowing the `keeper` access from your home ip address only. Once the `keeper` connects, the file `secret_password.txt` will end up in the agents working dir (`/tmp` by default) 

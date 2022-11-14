@@ -6,7 +6,7 @@ import dns.resolver
 import dns.reversename
 
 
-def _get_own_ip():
+def _get_own_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(0)
     try:

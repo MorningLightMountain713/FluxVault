@@ -165,10 +165,10 @@ def agent(
     ),
 ):
 
-    whitelist_addresses = whitelist_addresses.split(",")
-    whitelist_addresses = list(filter(None, whitelist_addresses))
-    manage_files = manage_files.split(",")
-    manage_files = list(filter(None, manage_files))
+    whitelisted_addresses = whitelisted_addresses.split(",")
+    whitelisted_addresses = list(filter(None, whitelisted_addresses))
+    managed_files = managed_files.split(",")
+    managed_files = list(filter(None, managed_files))
 
     agent = FluxAgent(
         bind_address=bind_address,

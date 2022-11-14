@@ -68,7 +68,7 @@ Running the container:
 Every configuration option available for `fluxvault` can either be specified on the command line or via environment variables. If using env vars, all options are prefixed with `FLUXVAULT_`. For example, to start the container above we could do the following:
 
 ```
- docker run -e FLUXVAULT_WHITELIST_ADDRESSES=<your ip>,<your other ip> -e FLUXVAULT_MANAGE_FILES=secret_password.txt -it yourrepo/container:latest
+ docker run -e FLUXVAULT_WHITELISTED_ADDRESSES=<your ip>,<your other ip> -e FLUXVAULT_MANAGED_FILES=secret_password.txt -it yourrepo/container:latest
 ```
 
 ### Fluxvault - running as a Companion component
@@ -79,9 +79,9 @@ Add this container to your Flux application
 
 Specify environement variables for configuration, at a minimum, you will need the following, see later sections for more info.
 
-FLUXVAULT_WHITELIST_ADDRESSES - comma seperated list of ip addresses
+FLUXVAULT_WHITELISTED_ADDRESSES - comma seperated list of ip addresses
 
-FLUXVAULT_MANAGE_FILES - comma seperated list of files you want delivered
+FLUXVAULT_MANAGED_FILES - comma seperated list of files you want delivered
 
 FLUXVAULT_FILESERVER - True, will enable the local http fileserver
 
@@ -152,9 +152,9 @@ All options are able to be passed as an environment variable. Just prefix the op
   * bind_port - the port to listen on. 8888 by default.
   * enable_local_fileserver - for multicomponent apps. If you want to share the secret files to other components.
   * local_fileserver_port - the port to serve files on. 2080 by default.
-  * manage_files - comma seperated string of files you want the keeper to provide to the application.
+  * managed_files - comma seperated string of files you want the keeper to provide to the application.
   * working_dir - where the files will be stored locally.
-  * whitelist_addresses - comma seperated string of ip addresses that are allowed to talk to the agent. (your home ip address)
+  * whitelisted_addresses - comma seperated string of ip addresses that are allowed to talk to the agent. (your home ip address)
   * disable_authentication - Development only - don't do this on a real app.
 
 ### Keeper specific configuration options

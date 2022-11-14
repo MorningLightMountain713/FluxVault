@@ -131,11 +131,11 @@ def agent(
         show_envvar=False,
         help="For multi-component apps",
     ),
-    manage_files: str = typer.Option(
+    managed_files: str = typer.Option(
         "",
         "--manage-files",
         "-m",
-        envvar=f"{PREFIX}_MANAGE_FILES",
+        envvar=f"{PREFIX}_MANAGED_FILES",
         show_envvar=False,
         help="Comma seperated files we want from keeper",
     ),
@@ -147,11 +147,11 @@ def agent(
         show_envvar=False,
         help="Where files will be stored",
     ),
-    whitelist_addresses: str = typer.Option(
+    whitelisted_addresses: str = typer.Option(
         "",
         "--whitelist-addresses",
         "-w",
-        envvar=f"{PREFIX}_WHITELIST_ADDRESSES",
+        envvar=f"{PREFIX}_WHITELISTED_ADDRESSES",
         show_envvar=False,
         help="Comma seperated addresses to whitelist",
     ),
@@ -175,9 +175,9 @@ def agent(
         bind_port=bind_port,
         enable_local_fileserver=enable_local_fileserver,
         local_fileserver_port=local_fileserver_port,
-        managed_files=manage_files,
+        managed_files=managed_files,
         working_dir=working_dir,
-        whitelisted_addresses=whitelist_addresses,
+        whitelisted_addresses=whitelisted_addresses,
         authenticate_vault=not disable_authentication,
     )
 

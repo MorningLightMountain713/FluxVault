@@ -33,7 +33,7 @@ def _get_ptr(ip: str) -> str:
 
 def _parse_ptr_to_names(ptr: str) -> list:
     # The ptr record contains the fqdn - hostname.networkname
-    if not ptr:
+    if not ptr or ptr == "localhost.":
         return ["", ""]
 
     fqdn = ptr.split(".")
@@ -43,6 +43,7 @@ def _parse_ptr_to_names(ptr: str) -> list:
     host = host.lstrip("flux")
     host = host.split("_")
     component_name = host[0]
+    # this is a bit brittle, IndexOutOfRange errors suck
     app_name = host[1]
     return [component_name, app_name]
 

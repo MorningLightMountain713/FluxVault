@@ -142,7 +142,7 @@ class FluxAgent:
 
         # We only accept connections from local network. (Protect against punter
         # exposing the fileserver port on the internet)
-        if not ipaddress.ip_address(request.remote).is_private():
+        if not ipaddress.ip_address(request.remote).is_private:
             return web.Response(
                 body="Unauthorized",
                 status=403,

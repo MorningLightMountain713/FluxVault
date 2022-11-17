@@ -11,6 +11,7 @@ from aiotinyrpc.client import RPCClient
 from aiotinyrpc.exc import MethodNotFoundError
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.transports.socket import EncryptedSocketClientTransport
+from aiotinyrpc.auth import SignatureAuthProvider
 from requests.exceptions import HTTPError
 
 # this package
@@ -35,6 +36,8 @@ class FluxKeeper:
         app_name: str = "",
         agent_ips: list = [],
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
+        sign_connections: bool = False,
+        signing_key: str = "",
     ):
         self.app_name = app_name
         self.agent_ips = agent_ips if agent_ips else self.get_agent_ips()
@@ -45,8 +48,17 @@ class FluxKeeper:
         self.protocol = JSONRPCProtocol()
         self.vault_dir = vault_dir
 
+        if not signing_key and sign_connections:
+            raise ValueError("Signing key must be provided if signing connections")
+
+        auth_provider = None
+        if signing_key and sign_connections:
+            auth_provider = SignatureAuthProvider(key=signing_key)
+
         for ip in self.agent_ips:
-            transport = EncryptedSocketClientTransport(ip, comms_port)
+            transport = EncryptedSocketClientTransport(
+                ip, comms_port, auth_provider=auth_provider
+            )
 
             flux_agent = RPCClient(self.protocol, transport)
             self.agents.update({ip: flux_agent})

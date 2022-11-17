@@ -9,12 +9,14 @@ import os
 
 # 3rd party
 import aiofiles
-from aiohttp import streamer, web
+from aiohttp import streamer, web, ClientSession
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
+from aiotinyrpc.auth import SignatureAuthProvider
 
 from fluxvault.extensions import FluxVaultExtensions
+
 # this package
 from fluxvault.helpers import get_app_and_component_name
 
@@ -48,7 +50,9 @@ class FluxAgent:
         managed_files: list = [],
         working_dir: str = "/tmp",
         whitelisted_addresses: list = ["127.0.0.1"],
-        authenticate_vault: bool = True,
+        verify_source_address: bool = True,
+        signed_vault_connections: bool = False,
+        zelid: str = "",
     ):
         self.app = web.Application()
         self.enable_local_fileserver = enable_local_fileserver
@@ -63,8 +67,10 @@ class FluxAgent:
 
         self.test_workdir_access()
 
-        if authenticate_vault and not whitelisted_addresses:
-            raise ValueError("whitelisted address(es) required")
+        if verify_source_address and not whitelisted_addresses:
+            raise ValueError(
+                "Whitelisted addresses must be provided if verifying source ip address"
+            )
 
         self.component_name, self.app_name = get_app_and_component_name()
 
@@ -74,15 +80,36 @@ class FluxAgent:
         # extensions.add_method(self.run_entrypoint)
         # extensions.add_method(self.extract_tar)
 
+        auth_provider = None
+        if signed_vault_connections:
+            # this is solely for testing without an app
+            if zelid:
+                address = zelid
+            else:
+                address = self.loop.run_until_complete(self.get_app_owner_zelid())
+            self.log.info(f"App zelid is: {address}")
+            auth_provider = SignatureAuthProvider(address=address)
+
         transport = EncryptedSocketServerTransport(
             bind_address,
             bind_port,
             whitelisted_addresses=whitelisted_addresses,
-            authenticate_clients=authenticate_vault,
+            verify_source_address=verify_source_address,
+            auth_provider=auth_provider,
         )
         self.rpc_server = RPCServer(transport, JSONRPCProtocol(), self.extensions)
 
         self.app.router.add_get("/file/{file_name}", self.download_file)
+
+    async def get_app_owner_zelid(self) -> str:
+        async with ClientSession() as session:
+            async with session.get(
+                f"https://api.runonflux.io/apps/appowner?appname={self.app_name}"
+            ) as resp:
+                # print(resp.status)
+                data = await resp.json()
+                zelid = data.get("data", "")
+        return zelid
 
     def get_logger(self) -> logging.Logger:
         """Gets a logger"""

@@ -15,7 +15,7 @@ stream_handler.setFormatter(formatter)
 log.addHandler(stream_handler)
 
 agent = FluxAgent(
-    managed_files=["super_secret.txt"],
+    managed_files=["secret_password.txt"],
     working_dir="/tmp",
     whitelisted_addresses=["127.0.0.1"],
 )

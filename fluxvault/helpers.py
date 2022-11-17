@@ -36,14 +36,16 @@ def _parse_ptr_to_names(ptr: str) -> list:
     if not ptr or ptr == "localhost.":
         return ["", ""]
 
+    app_name = ""
     fqdn = ptr.split(".")
     fqdn = list(filter(None, fqdn))
     host = fqdn[0]
     host = host.lstrip("flux")
     host = host.split("_")
     component_name = host[0]
-    # this is a bit brittle, IndexOutOfRange errors suck
-    app_name = host[1]
+    # if container name isn't specified end up with ['15f4fcb5a668', 'http']
+    if len(host) > 1:
+        app_name = host[1]
     return [component_name, app_name]
 
 

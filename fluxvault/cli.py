@@ -2,7 +2,6 @@ import logging
 import time
 
 import typer
-from click import BOOL
 import keyring
 import getpass
 
@@ -50,7 +49,7 @@ def configure_logs(log_to_file, logfile_path, debug):
 
 
 def yes_or_no(question, default="yes"):
-    """Ask a yes/no question via raw_input() and return their answer.
+    """Ask a yes/no question via input() and return their answer.
 
     "question" is a string that is presented to the user.
     "default" is the presumed answer if the user just hits <Enter>.

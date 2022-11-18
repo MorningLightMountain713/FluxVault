@@ -62,14 +62,6 @@ async def handle(request):
 app = web.Application()
 app.add_routes([web.get("/", handle), web.get("/{name}", handle)])
 
-
-async def poll_data():
-    status = 0
-    data = ""
-    while True:
-        data, status = await get()
-
-
 if __name__ == "__main__":
     web.run_app(app)' > myapp.py
 EOF

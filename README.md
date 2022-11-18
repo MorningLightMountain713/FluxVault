@@ -207,6 +207,54 @@ finally:
 
 ```
 
+## Advanced usage
+
+### Authentication and Message signing
+
+Since version 0.1.13 - it is now possible for the app owner to authenticate the Keeper to the Agents by signing a message - basically using your Zelid. The same as logging in to deploy an app on Flux.
+
+One drawback of limiting the source IPs of the Keeper(s) that are allowed to connect to the Agent is that you have to put these IPs into an ENV var that is viewable be everyone - meaning everyone can see the IP address of your Keeper. If you don't want to do that, you can now disable IP whitelists and move to message signing, where every connection from the Keeper to the agent is authenticated.
+
+You will need your Zelid private key in order to do this. Couple of options here. The recommended way is to run the app via the CLI - it will prompt you for your Zelid and securely store this in your systems secure storage area. On macOS this is the keychain, on Windows this is credential manager and Unix based flavours have their own mechanisms.
+
+Once stored securely, every time you need the Keeper, you just enter you Zelid (to find the key in storage) and you no longer need to enter your key.
+
+If desired, as an added layer of security, you can add both message signing and source ip verification.
+
+Here is an example of how to configure message signing via the CLI.
+
+Agent:
+
+```
+fluxvault agent --manage-files quotes.txt --signed-vault-connections
+```
+
+* Note, for development, you can pass in the Zelid on the agent if it won't be running on a Fluxnode (normally the agent would get the zelid of the app owner from the Flux network)
+
+Keeper:
+
+```
+fluxvault keeper --vault-dir examples/files --sign-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM
+```
+
+For the Keeper, you must pass in the Zelid in order to store the private key against. This means you can have multiple private keys stored securely.
+
+Once the keeper is started, it will prompt you for your private key, as seen below.
+
+```
+** WARNING **
+
+You are about to enter your private key into a 3rd party application. Please make sure your are comfortable doing so. If you would like to review the code to make sure your key is safe... please visit https://github.com/RunOnFlux/FluxVault to validate the code.
+
+ Please enter your private key (in WIF format):
+
+Would you like to store your private key in your device's secure store?
+
+(macOS: keyring, Windows: Windows Credential Locker, Ubuntu: GNOME keyring.
+
+ This means you won't need to enter your private key every time this program is run. [Yes] y
+ ```
+
 ## Development
 
 Fluxvault is formatted using black and isort, and built with poetry.

@@ -39,7 +39,7 @@ frozenlist = ">=1.1.0"
 
 [[package]]
 name = "aiotinyrpc"
-version = "0.5.2"
+version = "0.5.3"
 description = "\"An aio version of tinyrpc\""
 category = "main"
 optional = false
@@ -476,7 +476,7 @@ testing = ["pytest (>=6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "flake8 
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.9"
-content-hash = "d8f24623ec7d76406e5a416be89cc53cd7d7300e4f44fb641cd6b32ac8cd9a5f"
+content-hash = "78bade965ea09aa47f685c7fa6e8d96cdc7b02e8b71a826e965058a20bf8488a"
 
 [metadata.files]
 aiofiles = []

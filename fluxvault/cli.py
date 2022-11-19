@@ -306,6 +306,16 @@ def main(
     configure_logs(enable_logfile, logfile_path, debug)
 
 
+@app.command()
+def remove_private_key(zelid: str):
+    try:
+        keyring.delete_password("fluxvault_app", zelid)
+    except keyring.errors.PasswordDeleteError:
+        typer.echo("Private key doesn't exist")
+    else:
+        typer.echo("Private key deleted")
+
+
 def entrypoint():
     """Called by console script"""
     app()

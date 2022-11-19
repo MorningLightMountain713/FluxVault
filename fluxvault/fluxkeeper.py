@@ -139,56 +139,75 @@ class FluxKeeper:
         return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
 
     def get_all_agents_methods(self) -> dict:
+        return self.loop.run_until_complete(self._get_agents_methods())
+
+    async def get_agent_method(self, address, agent):
+        await agent.transport.connect()
+
+        if not agent.transport.connected:
+            return {}
+
+        agent_proxy = agent.get_proxy()
+        methods = await agent_proxy.get_methods()
+        await agent.transport.disconnect()
+        return {address: methods}
+
+    async def _get_agents_methods(self) -> dict:
         """Queries every agent and returns a list describing what methods can be run on
         each agent"""
-        # Todo test multiple agents
-        all_methods = {}
+        tasks = []
         for address, agent in self.agents.items():
-            agent.transport.connect()
+            task = asyncio.create_task(self.get_agent_method(address, agent))
+            tasks.append(task)
 
-            if not agent.transport.connected:
-                continue  # transport will log warning
-
-            agent_proxy = agent.get_proxy()
-            methods = agent_proxy.get_methods()
-            agent.transport.disconnect()
-            all_methods.update({address: methods})
-
+        all_methods = {}
+        results = await asyncio.gather(*tasks)
+        for result in results:
+            all_methods.update(result)
         return all_methods
 
+    async def poll_agent(self, address, agent):
+        self.log.debug(f"Contacting Agent {address} to check if files required")
+
+        await agent.transport.connect()
+        if not agent.transport.connected:
+            self.log.info("Transport not connected... skipping.")
+            return  # transport will log warning
+
+        agent_proxy = agent.get_proxy()
+
+        files_to_write = {}
+        files = await agent_proxy.get_all_files_crc()
+        self.log.debug(f"Agent {address} remote file CRCs: {files}")
+
+        if not files:
+            self.log.warn(f"Agent {address} didn't request any files... skipping!")
+            return
+
+        for file in files:
+            match_data = self.compare_files(file)
+            self.log_file_match_details(file["name"], match_data)
+            if match_data["secret"]:
+                files_to_write.update({file["name"]: match_data["secret"]})
+
+        if files_to_write:
+            await agent_proxy.write_files(files=files_to_write)
+        await agent.transport.disconnect()
+
     def poll_all_agents(self):
+        self.loop.run_until_complete(self._poll_agents())
+
+    async def _poll_agents(self):
         # ToDo: async
         """Checks if agents need any files delivered securely"""
         if not self.agent_ips:
             self.log.info("No agents found... nothing to do")
 
+        polling_tasks = []
         for address, agent in self.agents.items():
-            self.log.debug(f"Contacting Agent {address} to check if files required")
-
-            agent.transport.connect()
-            if not agent.transport.connected:
-                self.log.info("Transport not connected... skipping.")
-                continue  # transport will log warning
-
-            agent_proxy = agent.get_proxy()
-
-            files_to_write = {}
-            files = agent_proxy.get_all_files_crc()
-            self.log.debug(f"Agent {address} remote file CRCs: {files}")
-
-            if not files:
-                self.log.warn(f"Agent {address} didn't request any files... skipping!")
-                return
-
-            for file in files:
-                match_data = self.compare_files(file)
-                self.log_file_match_details(file["name"], match_data)
-                if match_data["secret"]:
-                    files_to_write.update({file["name"]: match_data["secret"]})
-
-            if files_to_write:
-                agent_proxy.write_files(files=files_to_write)
-            agent.transport.disconnect()
+            task = asyncio.create_task(self.poll_agent(address, agent))
+            polling_tasks.append(task)
+        await asyncio.gather(*polling_tasks)
 
     def log_file_match_details(self, file_name, match_data):
         if not match_data["file_found_locally"]:

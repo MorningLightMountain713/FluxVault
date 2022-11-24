@@ -453,11 +453,6 @@ class FluxAgent:
         #         )
         #     )
 
-        with open("component1.key", "wb+") as f:
-            f.write(
-                key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
-            )
-
         csr = (
             x509.CertificateSigningRequestBuilder()
             .subject_name(

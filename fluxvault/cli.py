@@ -234,7 +234,7 @@ def agent(
         help="Comma seperated addresses to whitelist",
     ),
     verify_source_address: bool = typer.Option(
-        True,
+        False,
         "--verify-source-address",
         "-z",
         envvar=f"{PREFIX}_VERIFY_SOURCE_ADDRESS",
@@ -255,6 +255,30 @@ def agent(
         show_envvar=False,
         help="Testing only... if you aren't running this on a Fluxnode",
     ),
+    subordinate: bool = typer.Option(
+        False,
+        "--subordinate",
+        envvar=f"{PREFIX}_SUBORDINATE",
+        show_envvar=False,
+        hidden=True,
+        help="If this agent is a subordinate of another agent",
+    ),
+    superior_address: str = typer.Option(
+        "",
+        "--superior-address",
+        envvar=f"{PREFIX}_SUPERIOR_ADDRESS",
+        show_envvar=False,
+        hidden=True,
+        help="Primary agent address",
+    ),
+    superior_port: str = typer.Option(
+        "",
+        "--superior-port",
+        envvar=f"{PREFIX}_SUPERIOR_PORT",
+        show_envvar=False,
+        hidden=True,
+        help="Primary agent port",
+    ),
 ):
 
     whitelisted_addresses = whitelisted_addresses.split(",")
@@ -273,6 +297,9 @@ def agent(
         verify_source_address=verify_source_address,
         signed_vault_connections=signed_vault_connections,
         zelid=zelid,
+        subordinate=subordinate,
+        superior_address=superior_address,
+        superior_port=superior_port,
     )
 
     agent.run()

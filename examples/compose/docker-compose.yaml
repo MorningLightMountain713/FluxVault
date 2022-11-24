@@ -1,0 +1,49 @@
+version: "3.9"
+name: demo
+
+# to run this (from this directory):
+
+# docker compose up --build
+
+# to run the keeper install fluxvault and then from the top directory run:
+
+# fluxvault keeper --agent-ips 127.0.0.1 --vault-dir examples/files --sign-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --polling-interval 20
+
+# you should then get prompted for the private key.. use the following:
+
+# Kwd2NvAavdEjYFWj299R6csDyoFeQsLvH5ZkN1Bb8jQcf1e8Qre7
+
+services:
+  fluxagent:
+    container_name: fluxfluxagent_apptime
+    build: .
+    ports:
+      - "8888:8888"
+    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --fileserver
+    networks:
+      agent:
+      internet:
+        ipv4_address: 192.168.74.44
+  cool_container_1:
+    container_name: fluxcontainer1_apptime
+    build: .
+    depends_on:
+      - fluxagent
+    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --subordinate
+    networks:
+      - agent
+  cool_container_2:
+    container_name: fluxcontainer2_apptime
+    build: .
+    depends_on:
+      - fluxagent
+    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --subordinate
+    networks:
+      - agent
+networks:
+  internet:
+    ipam:
+      driver: default
+      config:
+        - subnet: "192.168.74.0/24"
+  agent:

@@ -4,10 +4,20 @@ import binascii
 import logging
 import time
 from typing import Callable
+import shutil
 
 # 3rd party
+from ownca import CertificateAuthority
+from ownca.exceptions import OwnCAInvalidCertificate
+
+import cryptography
+from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.hazmat.primitives.serialization import PublicFormat
+
+from cryptography.x509.oid import NameOID
+
 import requests
-from aiotinyrpc.client import RPCClient
+from aiotinyrpc.client import RPCClient, RPCProxy
 from aiotinyrpc.exc import MethodNotFoundError
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.transports.socket import EncryptedSocketClientTransport
@@ -42,22 +52,37 @@ class FluxKeeper:
         self.app_name = app_name
         self.agent_ips = agent_ips if agent_ips else self.get_agent_ips()
         self.agents = {}
+        self.comms_port = comms_port
         self.extensions = extensions
         self.log = self.get_logger()
         self.loop = asyncio.get_event_loop()
         self.protocol = JSONRPCProtocol()
         self.vault_dir = vault_dir
 
+        self.ca = CertificateAuthority(
+            ca_storage="ca", common_name="Fluxvault Keeper CA"
+        )
+        try:
+            cert = self.ca.load_certificate("keeper.fluxvault.com")
+        except OwnCAInvalidCertificate:
+            cert = self.ca.issue_certificate(
+                "keeper.fluxvault.com", dns_names=["keeper.fluxvault.com"]
+            )
+
+        self.cert = cert.cert_bytes
+        self.key = cert.key_bytes
+        self.ca_cert = self.ca.cert_bytes
+
         if not signing_key and sign_connections:
             raise ValueError("Signing key must be provided if signing connections")
 
-        auth_provider = None
+        self.auth_provider = None
         if signing_key and sign_connections:
-            auth_provider = SignatureAuthProvider(key=signing_key)
+            self.auth_provider = SignatureAuthProvider(key=signing_key)
 
         for ip in self.agent_ips:
             transport = EncryptedSocketClientTransport(
-                ip, comms_port, auth_provider=auth_provider
+                ip, comms_port, auth_provider=self.auth_provider, proxy_target=""
             )
 
             flux_agent = RPCClient(self.protocol, transport)
@@ -141,7 +166,7 @@ class FluxKeeper:
     def get_all_agents_methods(self) -> dict:
         return self.loop.run_until_complete(self._get_agents_methods())
 
-    async def get_agent_method(self, address, agent):
+    async def get_agent_method(self, address: str, agent: RPCClient):
         await agent.transport.connect()
 
         if not agent.transport.connected:
@@ -176,12 +201,16 @@ class FluxKeeper:
 
         agent_proxy = agent.get_proxy()
 
+        # should this just be a task?
+        await self.poll_subordinates(address, agent_proxy)
+
         files_to_write = {}
         files = await agent_proxy.get_all_files_crc()
         self.log.debug(f"Agent {address} remote file CRCs: {files}")
 
         if not files:
             self.log.warn(f"Agent {address} didn't request any files... skipping!")
+            await agent.transport.disconnect()
             return
 
         for file in files:
@@ -191,6 +220,7 @@ class FluxKeeper:
                 files_to_write.update({file["name"]: match_data["secret"]})
 
         if files_to_write:
+            agent_proxy.one_way = True
             await agent_proxy.write_files(files=files_to_write)
         await agent.transport.disconnect()
 
@@ -198,7 +228,6 @@ class FluxKeeper:
         self.loop.run_until_complete(self._poll_agents())
 
     async def _poll_agents(self):
-        # ToDo: async
         """Checks if agents need any files delivered securely"""
         if not self.agent_ips:
             self.log.info("No agents found... nothing to do")
@@ -225,6 +254,77 @@ class FluxKeeper:
         elif match_data["secret"]:
             self.log.info(f"Agent requested new file {file_name}... sending")
 
+    async def enroll_agent(self, target: str, agent: RPCClient):
+        await agent.transport.connect()
+        if not agent.transport.connected:
+            self.log.info(f"Transport not connected for agent {target}... skipping.")
+            return  # transport will log warning
+
+        self.log.info(f"Enrolling agent {target}")
+        proxy = agent.get_proxy()
+        res = await proxy.generate_csr()
+        csr_bytes = res.get("csr")
+
+        csr = cryptography.x509.load_pem_x509_csr(csr_bytes)
+
+        # print(
+        #     csr.public_key().public_bytes(
+        #         Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
+        #     )
+        # )
+
+        hostname = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+
+        try:
+            cert = self.ca.load_certificate(hostname)
+            self.ca.revoke_certificate(hostname)
+        except OwnCAInvalidCertificate:
+            pass
+        finally:
+            # ToDo: there has to be a better way (don't delete cert)
+            # start using CRL? Do all nodes need CRL - probably
+            shutil.rmtree(f"ca/certs/{hostname}", ignore_errors=True)
+            cert = self.ca.sign_csr(csr, csr.public_key())
+
+        await proxy.install_cert(cert.cert_bytes)
+        await proxy.install_ca_cert(self.ca.cert_bytes)
+
+        proxy.one_way = True  # be careful setting this. May need to set it back
+        await proxy.upgrade_to_ssl()
+        await agent.transport.disconnect()
+
+    async def poll_subordinates(self, address: str, agent_proxy: RPCProxy):
+        # ToDo: rewrite this. Concurrency
+        subordinates = await agent_proxy.get_subagents()
+        self.log.info(f"Agent {address} has the following subordinates: {subordinates}")
+
+        for target, payload in subordinates.get("sub_agents").items():
+            role = payload.get("role")  # not implemented yet
+            enrolled = payload.get("enrolled")
+            proxy_port = self.comms_port + 1 if enrolled else self.comms_port
+            ssl = True if enrolled else False
+            transport = EncryptedSocketClientTransport(
+                address,
+                self.comms_port,
+                auth_provider=self.auth_provider,
+                proxy_target=target,
+                proxy_port=proxy_port,
+                proxy_ssl=ssl,
+                cert=self.cert,
+                key=self.key,
+                ca=self.ca_cert,
+            )
+            flux_agent = RPCClient(self.protocol, transport)
+
+            if not enrolled:
+                await self.enroll_agent(target, flux_agent)
+            else:
+                await self.poll_agent(target, flux_agent)
+            self.log.info("Finished poll subordinates")
+            # asyncio.create_task(self.poll_agent(target, flux_agent))
+
+    # Removed this. Maybe implement again later
+    #
     # def run_agent_entrypoint(self):
     #     print(self.agents)
     #     agent = self.agents["127.0.0.1"]

@@ -1,11 +1,12 @@
+import getpass
 import logging
 import time
 
-import typer
 import keyring
-import getpass
+import typer
 
 from fluxvault import FluxAgent, FluxKeeper
+from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 
 PREFIX = "FLUXVAULT"
 
@@ -193,21 +194,37 @@ def agent(
         envvar=f"{PREFIX}_BIND_PORT",
         show_envvar=False,
     ),
-    enable_local_fileserver: bool = typer.Option(
+    enable_registrar: bool = typer.Option(
         False,
-        "--fileserver",
+        "--registrar",
         "-s",
-        envvar=f"{PREFIX}_FILESERVER",
+        envvar=f"{PREFIX}_REGISTRAR",
         show_envvar=False,
-        help="Serve vault files to other components",
+        help="Act as a proxy registrar for other agents",
     ),
-    local_fileserver_port: int = typer.Option(
+    registrar_port: int = typer.Option(
         "2080",
-        "--fileserver-port",
+        "--registrar-port",
         "-z",
-        envvar=f"{PREFIX}_FILESERVER_PORT",
+        envvar=f"{PREFIX}_REGISTRAR_PORT",
         show_envvar=False,
-        help="For multi-component apps",
+        help="Port for registrar to listen on",
+    ),
+    registrar_address: str = typer.Option(
+        "0.0.0.0",
+        "--registrar-address",
+        "-v",
+        envvar=f"{PREFIX}_REGISTRAR_ADDRESS",
+        show_envvar=False,
+        help="Address for registrar to bind on",
+    ),
+    enable_registrar_fileserver: bool = typer.Option(
+        False,
+        "--registrar-fileserver",
+        "-q",
+        envvar=f"{PREFIX}_REGISTRAR_FILESERVER",
+        show_envvar=False,
+        help="Serve files over http (no authentication)",
     ),
     managed_files: str = typer.Option(
         "",
@@ -263,18 +280,25 @@ def agent(
         hidden=True,
         help="If this agent is a subordinate of another agent",
     ),
-    superior_address: str = typer.Option(
+    primary_agent_name: str = typer.Option(
+        "fluxagent",
+        "--primary-agent-name",
+        envvar=f"{PREFIX}_PRIMARY_AGENT_NAME",
+        show_envvar=False,
+        help="Primary agent name",
+    ),
+    primary_agent_address: str = typer.Option(
         "",
-        "--superior-address",
-        envvar=f"{PREFIX}_SUPERIOR_ADDRESS",
+        "--primary-agent-address",
+        envvar=f"{PREFIX}_PRIMARY_AGENT_ADDRESS",
         show_envvar=False,
         hidden=True,
         help="Primary agent address",
     ),
-    superior_port: str = typer.Option(
+    primary_agent_port: str = typer.Option(
         "",
-        "--superior-port",
-        envvar=f"{PREFIX}_SUPERIOR_PORT",
+        "--primary-agent-port",
+        envvar=f"{PREFIX}_PRIMARY_AGENT_PORT",
         show_envvar=False,
         hidden=True,
         help="Primary agent port",
@@ -286,11 +310,28 @@ def agent(
     managed_files = managed_files.split(",")
     managed_files = list(filter(None, managed_files))
 
+    registrar = None
+    if enable_registrar:
+        registrar = FluxAgentRegistrar(
+            bind_address=registrar_address,
+            bind_port=registrar_port,
+            enable_fileserver=enable_registrar_fileserver,
+        )
+
+    primary_agent = None
+    if subordinate:
+        primary_agent = FluxPrimaryAgent(
+            name=primary_agent_name,
+            address=primary_agent_address,
+            port=primary_agent_port,
+        )
+
     agent = FluxAgent(
         bind_address=bind_address,
         bind_port=bind_port,
-        enable_local_fileserver=enable_local_fileserver,
-        local_fileserver_port=local_fileserver_port,
+        enable_registrar=enable_registrar,
+        registrar=registrar,
+        primary_agent=primary_agent,
         managed_files=managed_files,
         working_dir=working_dir,
         whitelisted_addresses=whitelisted_addresses,
@@ -298,8 +339,6 @@ def agent(
         signed_vault_connections=signed_vault_connections,
         zelid=zelid,
         subordinate=subordinate,
-        superior_address=superior_address,
-        superior_port=superior_port,
     )
 
     agent.run()

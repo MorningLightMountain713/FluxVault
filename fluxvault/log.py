@@ -23,3 +23,6 @@ def configure_logs(log_to_file, logfile_path, debug):
     if log_to_file:
         aiotinyrpc_log.addHandler(file_handler)
         vault_log.addHandler(file_handler)
+
+
+log = logging.getLogger("fluxvault")

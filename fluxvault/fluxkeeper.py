@@ -2,26 +2,23 @@
 import asyncio
 import binascii
 import logging
+import shutil
 import time
 from typing import Callable
-import shutil
-
-# 3rd party
-from ownca import CertificateAuthority
-from ownca.exceptions import OwnCAInvalidCertificate
 
 import cryptography
-from cryptography.hazmat.primitives.serialization import Encoding
-from cryptography.hazmat.primitives.serialization import PublicFormat
-
-from cryptography.x509.oid import NameOID
-
 import requests
+from aiotinyrpc.auth import SignatureAuthProvider
 from aiotinyrpc.client import RPCClient, RPCProxy
 from aiotinyrpc.exc import MethodNotFoundError
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.transports.socket import EncryptedSocketClientTransport
-from aiotinyrpc.auth import SignatureAuthProvider
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.x509.oid import NameOID
+
+# 3rd party
+from ownca import CertificateAuthority
+from ownca.exceptions import OwnCAInvalidCertificate
 from requests.exceptions import HTTPError
 
 # this package
@@ -296,7 +293,8 @@ class FluxKeeper:
     async def poll_subordinates(self, address: str, agent_proxy: RPCProxy):
         # ToDo: rewrite this. Concurrency
         subordinates = await agent_proxy.get_subagents()
-        self.log.info(f"Agent {address} has the following subordinates: {subordinates}")
+        sub_names = [k for k in subordinates["sub_agents"]]
+        self.log.info(f"Agent {address} has the following subordinates: {sub_names}")
 
         for target, payload in subordinates.get("sub_agents").items():
             role = payload.get("role")  # not implemented yet

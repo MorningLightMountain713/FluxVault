@@ -19,7 +19,7 @@ services:
     build: .
     ports:
       - "8888:8888"
-    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --fileserver
+    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --registrar
     networks:
       agent:
       internet:

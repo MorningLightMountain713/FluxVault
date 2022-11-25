@@ -295,8 +295,8 @@ def agent(
         hidden=True,
         help="Primary agent address",
     ),
-    primary_agent_port: str = typer.Option(
-        "",
+    primary_agent_port: int = typer.Option(
+        "2080",
         "--primary-agent-port",
         envvar=f"{PREFIX}_PRIMARY_AGENT_PORT",
         show_envvar=False,

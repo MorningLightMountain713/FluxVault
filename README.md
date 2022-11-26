@@ -273,7 +273,7 @@ When the keeper connects, the agent still autheticates the keeper via a signed m
 
 When running the agent in primary mode for proxying, set the `--registrar` flag.
 
-When running the agent in sub-agent mode for proxying, set the `--subordinate` flag. By default all sub-agents expect the component name to be "fluxvault" of the primary agent. If it's different you can set this on the sub-agent via the `--primary-agent-name` switch
+When running the agent in sub-agent mode for proxying, set the `--subordinate` flag. By default all sub-agents expect the component name to be "fluxagent" of the primary agent. If it's different you can set this on the sub-agent via the `--primary-agent-name` switch
 
 There is an example of how to do this in the examples/compose/demo directory
 

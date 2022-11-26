@@ -5,13 +5,21 @@ This package provides a way to securely load passwords and private data into a r
 
 If you just want to have at it - please skip to the `quickstart` section below.
 
+## Overview
+
+![vault overview](https://github.com/MorningLightMountain713/FluxVault/blob/feature/async_rpc/vault_overview.png?raw=true)
+
 ## How does it work?
 
 Flux vault has two pieces - The `agent` that runs on a Fluxnode as part of your application, and the `keeper` that runs in your secure environment (usually your home computer or server).
 
 It is important that no one else has access to your secure environement - this is where your private data is located.
 
-The `agent` runs in the background on the Fluxnode, waiting for the `keeper` to connect. The agent is either installed on your app component, or run as a companion component that will securely serve files to your other components.
+The `agent` has two methods of operation, standalone mode and proxy mode.
+
+In standalone mode, you would generally only have one component, with the `agent` running on that component, receiving files securely from the `keeper`
+
+In proxy mode, you would have multiple components, with one of those being a primary `agent` and the other components running sub-agents. The sub-agents register with the primary `agent`. When the Keeper connects to the primary agent, it then proxies the connection through to the sub-agents
 
 You then run the `keeper` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a service in the background. The agent will run in the background and update nodes continuously. (Every 10 minutes by default)
 
@@ -21,7 +29,7 @@ You then run the `keeper` in your environment. You have a couple of options here
 
 Installation:
 
-* Requires Python 3.9 or later
+* Requires Python 3.8 or later
 
 ```
 pip install fluxvault
@@ -254,6 +262,22 @@ Would you like to store your private key in your device's secure store?
 
  This means you won't need to enter your private key every time this program is run. [Yes] y
  ```
+
+### Proxy mode
+
+If running in proxy mode, with a primary agent and sub-agents, When the Keeper is proxied through to the sub-agents, the sub-agents generate a Certificate Signing Request, which the inbuilt Keeper Certificate Authority signs.
+
+The sub agent then upgrades it's server to use SSL and certificate authentication, on top of the existing socket encryption.
+
+When the keeper connects, the agent still autheticates the keeper via a signed message, then both keeper and agent authenticate each other via SSL certificates
+
+When running the agent in primary mode for proxying, set the `--registrar` flag.
+
+When running the agent in sub-agent mode for proxying, set the `--subordinate` flag. By default all sub-agents expect the component name to be "fluxvault" of the primary agent. If it's different you can set this on the sub-agent via the `--primary-agent-name` switch
+
+There is an example of how to do this in the examples/compose/demo directory
+
+* Note, when the keeper starts, it will create a certificate authority directory in your current directory, `ca`. This has all the certificates for you agents. When these are transferred to your agent, they are help in memory. If you would like to store these so you can use them for authentication for applications (eg mongo SSL) that is entirely possible.
 
 ## Development
 

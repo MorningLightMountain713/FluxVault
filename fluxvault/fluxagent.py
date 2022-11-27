@@ -166,8 +166,10 @@ class FluxAgent:
 
     async def run_async(self):
         if self.enable_registrar:
-            self.loop.create_task(self.start_site(self.app, self.registrar_port))
-            log.info(f"Sub agent http server running on port {self.registrar_port}")
+            self.loop.create_task(self.registrar.start_app())
+            log.info(
+                f"Sub agent http server running on port {self.registrar.bind_port}"
+            )
 
         self.loop.create_task(self.rpc_server.serve_forever())
 

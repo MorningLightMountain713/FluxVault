@@ -34,6 +34,7 @@ class FluxSubAgent:
     role: str = "NotAssigned"
 
     def as_dict(self):
+        # maybe just self.__dict__ minus parent
         return {
             "name": self.name,
             "dns_name": self.dns_name,

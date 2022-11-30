@@ -9,6 +9,8 @@ If you just want to have at it - please skip to the `quickstart` section below.
 
 ![vault overview](https://github.com/MorningLightMountain713/FluxVault/blob/feature/async_rpc/vault_overview.png?raw=true)
 
+![messaging](https://github.com/MorningLightMountain713/FluxVault/blob/feature/async_rpc/messaging.png?raw=true)
+
 ## How does it work?
 
 Flux vault has two pieces - The `agent` that runs on a Fluxnode as part of your application, and the `keeper` that runs in your secure environment (usually your home computer or server).

@@ -1,11 +1,14 @@
 # Standard library
 import asyncio
 import binascii
+import functools
 import logging
 import shutil
 import time
+from dataclasses import dataclass, field
 from typing import Callable
 
+# 3rd party
 import cryptography
 import requests
 from aiotinyrpc.auth import SignatureAuthProvider
@@ -15,8 +18,6 @@ from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.transports.socket import EncryptedSocketClientTransport
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.x509.oid import NameOID
-
-# 3rd party
 from ownca import CertificateAuthority
 from ownca.exceptions import OwnCAInvalidCertificate
 from requests.exceptions import HTTPError
@@ -85,6 +86,7 @@ class FluxKeeper:
             flux_agent = RPCClient(self.protocol, transport)
             self.agents.update({ip: flux_agent})
 
+        self.storage = {}  # For extensions to store data
         self.extensions.add_method(self.get_all_agents_methods)
         self.extensions.add_method(self.poll_all_agents)
 
@@ -331,8 +333,20 @@ class FluxKeeper:
 
     def __getattr__(self, name: str) -> Callable:
         try:
-            method = self.extensions.get_method(name)
+            func = self.extensions.get_method(name)
         except MethodNotFoundError as e:
             raise AttributeError(f"Method does not exist: {e}")
 
-        return method
+        if func.pass_context:
+            context = FluxVaultContext(self.agents, self.log)
+            func = functools.partial(func, context)
+        # Todo: delete function attribute
+
+        return func
+
+
+@dataclass
+class FluxVaultContext:
+    agents: dict
+    log: logging.Logger
+    storage: dict = field(default_factory=dict)

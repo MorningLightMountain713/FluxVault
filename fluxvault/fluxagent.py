@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import binascii
-import tempfile
 import os
 import ssl
+import tempfile
 
 import aiofiles
 from aiohttp import ClientSession
@@ -12,21 +12,19 @@ from aiotinyrpc.auth import SignatureAuthProvider
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.server import RPCServer
 from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
-
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-)
-from cryptography.x509.oid import NameOID, ExtensionOID
+from cryptography.hazmat.primitives.serialization import (Encoding,
+                                                          NoEncryption,
+                                                          PrivateFormat)
+from cryptography.x509.oid import ExtensionOID, NameOID
 
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log
+from fluxvault.registrar import (FluxAgentRegistrar, FluxPrimaryAgent,
+                                 FluxSubAgent)
 
 
 class FluxAgentException(Exception):

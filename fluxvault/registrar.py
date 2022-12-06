@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 from dataclasses import dataclass
-import asyncio
 
-from aiohttp import streamer, web
-from aiohttp import ClientConnectorError, ClientSession, ClientTimeout
+from aiohttp import (ClientConnectorError, ClientSession, ClientTimeout,
+                     streamer, web)
 
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log

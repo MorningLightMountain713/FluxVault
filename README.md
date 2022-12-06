@@ -13,15 +13,15 @@ If you just want to have at it - please skip to the `quickstart` section below.
 
 ## How does it work?
 
-Flux vault has two pieces - The `agent` that runs on a Fluxnode as part of your application, and the `keeper` that runs in your secure environment (usually your home computer or server).
+Flux vault has two pieces - The `agent` that runs on a Fluxnode as part of your application, and the `keeper`, that runs in your secure environment (usually your home computer or server).
 
-It is important that no one else has access to your secure environement - this is where your private data is located.
+It is important that no one else has access to your secure environment - this is where your private data is located.
 
 The `agent` has two methods of operation, standalone mode and proxy mode.
 
 In standalone mode, you would generally only have one component, with the `agent` running on that component, receiving files securely from the `keeper`
 
-In proxy mode, you would have multiple components, with one of those being a primary `agent` and the other components running sub-agents. The sub-agents register with the primary `agent`. When the Keeper connects to the primary agent, it then proxies the connection through to the sub-agents
+In proxy mode, you would have multiple components, with one of those being a primary `agent` and the other components running sub-agents. The sub-agents register with the primary `agent`. When the Keeper connects to the primary agent, it then proxies the connection through to the sub-agents.
 
 You then run the `keeper` in your environment. You have a couple of options here - you can manually run it periodically, or you can run it as a service in the background. The agent will run in the background and update nodes continuously. (Every 10 minutes by default)
 

@@ -28,5 +28,5 @@ Note, as the string gets longer, it gets exponentially harder to find.
 - Agent runs the file, which starts up processes (half of the available cpus)
 - Each process starts iterating through addresses trying to find a match for the vanity string
 - Keeper checks in every 30 seconds to see how they're getting on
-- After 1:30, Keeper asks the Agent to stop work
+- After 2:30, Keeper asks the Agent to stop work
 - end

@@ -58,14 +58,15 @@ async def check_workers(ctx):
             return
 
         agent_proxy = agent.get_proxy()
-        best = await agent_proxy.check_workers()
-        print(f"Best match from {address}: {best}")
+        reply = await agent_proxy.check_workers()
         await agent.transport.disconnect()
+        return reply
 
     tasks = []
     for address, agent in ctx.agents.items():
         tasks.append(asyncio.create_task(check_worker(address, agent)))
-    await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks)
+    return results
 
 
 @extensions.create(pass_context=True)
@@ -115,11 +116,24 @@ async def main():
 
     await keeper._poll_agents()
     await keeper.start_workers(passphrase, vanity)
+    await asyncio.sleep(30)
 
     try:
-        for _ in range(3):
+        # this is ugly
+        solution = None
+        for _ in range(5):
+            results = await keeper.check_workers()
+            for result in results:
+                solution = result.get("result")
+                if solution:
+                    print(f"Solved! Data: {solution}")
+                    break
+                else:
+                    print(f"Best match: {result.get('best')}")
+            if solution:
+                break
             await asyncio.sleep(30)
-            await keeper.check_workers()
+
     finally:
         await keeper.stop_workers()
 

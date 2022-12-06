@@ -3,9 +3,13 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 
 from hdwallet import BIP44HDWallet
-from hdwallet.cryptocurrencies import (CoinType, Cryptocurrency,
-                                       ExtendedPrivateKey, ExtendedPublicKey,
-                                       SegwitAddress)
+from hdwallet.cryptocurrencies import (
+    CoinType,
+    Cryptocurrency,
+    ExtendedPrivateKey,
+    ExtendedPublicKey,
+    SegwitAddress,
+)
 from hdwallet.utils import generate_mnemonic, is_mnemonic
 
 
@@ -142,7 +146,7 @@ async def main(stop_event, update_queue, response_queue, cpu_count, passphrase, 
         for chunk in chunks
     ]
 
-    print(f"Running on {len(futures)} threads (cpus)")
+    print(f"Running on {len(futures)} cpus")
 
     done, running = await asyncio.wait(futures, return_when=asyncio.FIRST_COMPLETED)
     end_time = time.time()

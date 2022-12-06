@@ -15,7 +15,7 @@ from fluxvault.extensions import FluxVaultExtensions
 extensions = FluxVaultExtensions()
 
 log = logging.getLogger()
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 formatter = logging.Formatter(
     "%(asctime)s: %(name)s: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
 )
@@ -33,8 +33,9 @@ def chmod_x_file(file):
 @extensions.create
 @extensions.pass_storage
 async def stop_workers(storage):
-    storage["continue_running"] = False
-    storage["stop_event"].set()
+    if storage.get("continue_running"):
+        storage["continue_running"] = False
+        storage["stop_event"].set()
 
 
 @extensions.create
@@ -52,14 +53,14 @@ async def check_workers(storage):
     if response:
         storage["continue_running"] = False
         storage["stop_event"].set()
-        return response
+        return {"best": "", "result": response}
 
     while True:
         try:
             message = update_queue.get(block=False)
         except Empty:
             storage["best"] = best
-            return best
+            return {"best": best, "result": None}
 
         if len(message) > len(best):
             best = message
@@ -99,9 +100,16 @@ async def run_file(storage: dict, file: str, packages: list, *args, **kwargs):
     runner = importlib.import_module(file)
 
     while storage["continue_running"]:
-        await runner.main(
-            stop_event, update_queue, response_queue, cpu_count() // 2, *args, **kwargs
-        )
+        if response_queue.empty():
+            await runner.main(
+                stop_event,
+                update_queue,
+                response_queue,
+                cpu_count() // 2,
+                *args,
+                **kwargs,
+            )
+        await asyncio.sleep(1)
 
     del storage["stop_event"]
     del storage["update_queue"]

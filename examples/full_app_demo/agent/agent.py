@@ -71,7 +71,7 @@ async def run_file(storage: dict, file: str, packages: list, *args, **kwargs):
     p = Path(f"{file}.py")
 
     if not p.exists() or p.stat().st_size == 0:
-        "File doesn't exist"
+        print("File doesn't exist")
         return
 
     try:

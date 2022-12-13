@@ -18,8 +18,11 @@ An example could be: `Pip`
 
 Note, as the string gets longer, it gets exponentially harder to find.
 
-- Start the agent first (from the `agent` directory) `python agent.py`
+- Start the agent first `fluxvault agent --bind-address 127.0.0.1 --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM`
+
 - Start the keeper (from the `keeper` directory) `python keeper.py <Vanity string>`
+
+- Watch the magic happen
 
 ## What is happening?
 

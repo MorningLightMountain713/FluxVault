@@ -43,8 +43,8 @@ class ManagedFile:
     remote_crc: int = 0
     keeper_context: bool = True
     local_file_exists: bool = True
-    remote_file_exists: bool = True
-    in_sync: bool = True
+    remote_file_exists: bool = False
+    in_sync: bool = False
     file_data: bytes = b""
 
     def validate_local_file(self):
@@ -68,19 +68,25 @@ class ManagedFile:
     def compare_files(self) -> dict:
         """Flux agent (node) is requesting a file"""
 
+        self.validate_local_file()
+
         if not self.remote_crc:  # remote file crc is 0 if it doesn't exist
             self.remote_file_exists = False
             log.info(f"Agent needs new file {self.local_path.name}... sending")
 
-        self.validate_local_file()
+        if self.remote_crc:
+            self.remote_file_exists = True
+            if self.remote_crc != self.local_crc:
+                self.in_sync = False
+                log.info(
+                    f"Agent remote file {str(self.remote_path)} is different that local file... sending latest data"
+                )
 
-        if self.remote_crc and self.remote_crc != self.local_crc:
-            self.in_sync = False
-            log.info(
-                f"Agent remote file {str(self.remote_path)} is different that local file... sending latest data"
-            )
-        else:  # files are the same
-            log.info(f"Agent file {str(self.remote_path)} is up to date... skipping!")
+            if self.remote_crc == self.local_crc:
+                log.info(
+                    f"Agent file {str(self.remote_path)} is up to date... skipping!"
+                )
+                self.in_sync = True
 
 
 @dataclass

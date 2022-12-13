@@ -22,7 +22,7 @@ services:
     build: .
     ports:
       - "8888:8888"
-    command: fluxvault --debug agent --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --registrar
+    command: fluxvault agent --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --registrar
     networks:
       agent:
       internet:

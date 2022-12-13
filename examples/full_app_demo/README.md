@@ -28,9 +28,9 @@ Note, as the string gets longer, it gets exponentially harder to find.
 
 - Standard Agent is started
 - Keeper checks into agent and is authenticated
-- Keeper loads vanity_finder plugin to Agent. This gives the Agent extra functionality
-- Agent then requests a file `runner.py`
-- Keeper then sends command to run this file (this is extended functionality that the plugin provides)
+- Keeper sends plugin "vanity_finder" and file called runner.py
+- Keeper loads vanity_finder plugin into Agent. This gives the Agent extra functionality
+- Keeper then sends command to run `runner.py` file (this is extended functionality that the plugin provides)
 - Agent installs any necessary packages
 - Agent runs the file, which starts up processes (half of the available cpus)
 - Each process starts iterating through addresses trying to find a match for the vanity string

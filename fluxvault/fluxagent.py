@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import binascii
+import importlib
 import os
 import ssl
+import subprocess
+import sys
 import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import aiofiles
 from aiohttp import ClientSession
@@ -15,16 +20,17 @@ from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.serialization import (Encoding,
-                                                          NoEncryption,
-                                                          PrivateFormat)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+)
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from fluxvault.extensions import FluxVaultExtensions
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log
-from fluxvault.registrar import (FluxAgentRegistrar, FluxPrimaryAgent,
-                                 FluxSubAgent)
+from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
 
 
 class FluxAgentException(Exception):
@@ -41,7 +47,6 @@ class FluxAgent:
         enable_registrar: bool = False,
         registrar: FluxAgentRegistrar | None = None,
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
-        managed_files: list = [],
         working_dir: str = "/tmp",
         whitelisted_addresses: list = ["127.0.0.1"],
         verify_source_address: bool = False,
@@ -54,7 +59,6 @@ class FluxAgent:
         self.enable_registrar = enable_registrar
         self.extensions = extensions
         self.loop = asyncio.get_event_loop()
-        self.managed_files = managed_files
         self.zelid = zelid
         self.working_dir = working_dir
         self.subordinate = subordinate
@@ -132,6 +136,9 @@ class FluxAgent:
         self.extensions.add_method(self.install_cert)
         self.extensions.add_method(self.install_ca_cert)
         self.extensions.add_method(self.upgrade_to_ssl)
+        self.extensions.add_method(self.load_plugins)
+        self.extensions.add_method(self.list_server_details)
+
         # self.extensions.add_method(self.run_entrypoint)
         # self.extensions.add_method(self.extract_tar)
 
@@ -223,36 +230,35 @@ class FluxAgent:
         """Returns methods available for the keeper to call"""
         return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
 
-    async def get_file_crc(self, fname: str) -> dict:
+    async def get_file_crc(self, path: str) -> dict:
         """Open the file and compute the crc, set crc=0 if not found"""
         # ToDo: catch file PermissionError
         try:
             # Todo: brittle as
-            async with aiofiles.open(self.working_dir + "/" + fname, mode="rb") as file:
+            async with aiofiles.open(path, mode="rb") as file:
                 content = await file.read()
                 file.close()
-
                 crc = binascii.crc32(content)
         except FileNotFoundError:
-            log.info(f"Local file {fname} not found")
+            log.info(f"Local file {path} not found")
             crc = 0
         # ToDo: Fix this
         except Exception as e:
             log.error(repr(e))
             crc = 0
 
-        return {"name": fname, "crc32": crc}
+        return {"name": path, "crc32": crc}
 
-    async def get_all_files_crc(self) -> list:
+    async def get_all_files_crc(self, files) -> list:
         """Returns the crc32 for each file that is being managed"""
         log.info("Returning all vault file hashes")
         tasks = []
-        for file in self.managed_files:
+        for file in files:
             tasks.append(self.loop.create_task(self.get_file_crc(file)))
         results = await asyncio.gather(*tasks)
         return results
 
-    async def write_file(self, fname: str, data: str | bytes, executable: bool = False):
+    async def write_file(self, path: str, data: str | bytes, executable: bool = False):
         """Write a single file to disk"""
         # ToDo: brittle file path
         # ToDo: catch file PermissionError etc
@@ -266,14 +272,19 @@ class FluxAgent:
         else:
             raise ValueError("Data written must be either str or bytes")
 
+        p = Path(path)
+
+        if not p.is_absolute():
+            p = self.working_dir / p
+
+        p.parent.mkdir(parents=True, exist_ok=True)
+
         # this will make the file being written executable
         opener = self.opener if executable else None
         try:
-            async with aiofiles.open(
-                self.working_dir + "/" + fname, mode=mode, opener=opener
-            ) as file:
+            async with aiofiles.open(p, mode=mode, opener=opener) as file:
                 await file.write(data)
-        # ToDo: whoa, tighten this up
+        # ToDo: tighten this up
         except Exception as e:
             log.error(repr(e))
 
@@ -290,6 +301,61 @@ class FluxAgent:
             log.info(f"Writing file {name}")
             await self.write_file(name, data)
             log.info("Writing complete")
+
+    def list_server_details(self):
+        return {
+            "working_dir": self.working_dir,
+            "plugins": self.extensions.list_plugins(),
+            "registrar_enabled": self.enable_registrar,
+        }
+
+    async def load_plugins(self, directory: str):
+        p = Path(directory)
+
+        if not p.is_absolute():
+            p = self.working_dir / p
+
+        log.info(f"loading plugins from directory {p}")
+
+        # print(os.getcwd())
+        sys.path.append(str(p))
+
+        # or p.stat().st_size == 0:
+        p.mkdir(parents=True, exist_ok=True)
+        # if not p.exists():
+        #     log.error("Plugin directory does not exist, skipping")
+        #     return
+        plugins = [
+            f.rstrip(".py") for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))
+        ]
+
+        log.debug(f"Plugins available: {plugins}")
+
+        for f in plugins:
+            importlib.invalidate_caches()
+            # ToDo: wrap try / except
+            try:
+                plugin = importlib.import_module(f)
+            except Exception as e:
+                log.error(e)
+            plugin = plugin.plugin
+            if isinstance(plugin, FluxVaultExtensions):
+                if plugin.required_packages:
+                    try:
+                        subprocess.run(
+                            [sys.executable, "-m", "pip", "install"]
+                            + plugin.required_packages,
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.STDOUT,
+                        )
+                    except subprocess.CalledProcessError:
+                        log.error("Error loading extensions packages, skipping")
+                        return
+                self.extensions.add_plugin(plugin)
+                log.info(f"Plugin {plugin.plugin_name} loaded")
+            else:
+                log.error("Plugin load error... skipping")
 
     async def generate_csr(self):
         if not self.component_name or not self.app_name:

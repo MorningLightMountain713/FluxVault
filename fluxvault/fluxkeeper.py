@@ -6,6 +6,7 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 # 3rd party
@@ -24,6 +25,85 @@ from requests.exceptions import HTTPError
 
 # this package
 from fluxvault.extensions import FluxVaultExtensions
+from fluxvault.log import log
+
+
+@dataclass
+class FluxVaultContext:
+    agents: dict
+    storage: dict = field(default_factory=dict)
+
+
+@dataclass
+class ManagedFile:
+    local_path: Path
+    remote_path: Path
+    local_workdir: Path = Path()
+    local_crc: int = 0
+    remote_crc: int = 0
+    keeper_context: bool = True
+    local_file_exists: bool = True
+    remote_file_exists: bool = True
+    in_sync: bool = True
+    file_data: bytes = b""
+
+    def validate_local_file(self):
+        if self.keeper_context:
+            if self.local_path.is_absolute():
+                raise ValueError("All paths must be relative on Keeper")
+
+            p = self.local_workdir / self.local_path
+
+        try:
+            with open(p, "rb") as f:
+                self.file_data = f.read()
+        except (FileNotFoundError, PermissionError):
+            self.local_file_exists = False
+            log.error(
+                f"Managed file {str(self.local_workdir)}/{str(self.local_path)} not found locally or permission error... skipping!"
+            )
+        else:  # file opened
+            self.local_crc = binascii.crc32(self.file_data)
+
+    def compare_files(self) -> dict:
+        """Flux agent (node) is requesting a file"""
+
+        if not self.remote_crc:  # remote file crc is 0 if it doesn't exist
+            self.remote_file_exists = False
+            log.info(f"Agent needs new file {self.local_path.name}... sending")
+
+        self.validate_local_file()
+
+        if self.remote_crc and self.remote_crc != self.local_crc:
+            self.in_sync = False
+            log.info(
+                f"Agent remote file {str(self.remote_path)} is different that local file... sending latest data"
+            )
+        else:  # files are the same
+            log.info(f"Agent file {str(self.remote_path)} is up to date... skipping!")
+
+
+@dataclass
+class ManagedFileGroup:
+    files: list[ManagedFile] = field(default_factory=list)
+
+    def remote_paths(self):
+        return [str(x.remote_path) for x in self.files]
+
+    def add(self, file: ManagedFile):
+        self.files.append(file)
+
+    def get(self, name):
+        for file in self.files:
+            if file.local_path.name == name:
+                return file
+
+    def to_agent_dict(self):
+        return {
+            str(file.remote_path): file.file_data
+            for file in self.files
+            if not file.remote_file_exists or not file.in_sync
+        }
 
 
 # ToDo: async
@@ -44,6 +124,7 @@ class FluxKeeper:
         app_name: str = "",
         agent_ips: list = [],
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
+        managed_files: list = [],
         sign_connections: bool = False,
         signing_key: str = "",
     ):
@@ -52,10 +133,20 @@ class FluxKeeper:
         self.agents = {}
         self.comms_port = comms_port
         self.extensions = extensions
-        self.log = self.get_logger()
+        self.managed_files = ManagedFileGroup()
         self.loop = asyncio.get_event_loop()
         self.protocol = JSONRPCProtocol()
         self.vault_dir = vault_dir
+
+        for file_str in managed_files:
+            split_file = file_str.split(":")
+            local = split_file[0]
+            try:
+                remote = split_file[1]
+            except IndexError:
+                # we don't have a remote path
+                remote = local
+            self.managed_files.add(ManagedFile(Path(local), Path(remote)))
 
         self.ca = CertificateAuthority(
             ca_storage="ca", common_name="Fluxvault Keeper CA"
@@ -90,10 +181,6 @@ class FluxKeeper:
         self.extensions.add_method(self.get_all_agents_methods)
         self.extensions.add_method(self.poll_all_agents)
 
-    def get_logger(self) -> logging.Logger:
-        """Gets a logger"""
-        return logging.getLogger("fluxvault")
-
     def get_agent_ips(self):
         url = f"https://api.runonflux.io/apps/location/{self.app_name}"
         res = requests.get(url, timeout=10)
@@ -125,38 +212,6 @@ class FluxKeeper:
                 node_ips.append(ip)
 
         return node_ips
-
-    def compare_files(self, file: dict) -> dict:
-        """Flux agent (node) is requesting a file"""
-
-        # ToDo: Errors
-        name = file["name"]
-        crc = file["crc32"]
-
-        remote_file_exists = False
-        file_found_locally = True
-        secret = ""
-
-        if crc:  # remote file crc is 0 if it doesn't exist
-            remote_file_exists = True
-
-        try:
-            # ToDo: file name is brittle
-            # ToDo: catch file PermissionError
-            with open(self.vault_dir + "/" + name, "rb") as file:
-                file_data = file.read()
-        except FileNotFoundError:
-            file_found_locally = False
-        else:  # file opened
-            mycrc = binascii.crc32(file_data)
-            if crc != mycrc:
-                secret = file_data
-
-        return {
-            "file_found_locally": file_found_locally,
-            "remote_file_exists": remote_file_exists,
-            "secret": secret,
-        }
 
     def get_methods(self):
         """Returns methods available for the keeper to call"""
@@ -191,11 +246,11 @@ class FluxKeeper:
         return all_methods
 
     async def poll_agent(self, address, agent):
-        self.log.debug(f"Contacting Agent {address} to check if files required")
+        log.debug(f"Contacting Agent {address} to check if files required")
 
         await agent.transport.connect()
         if not agent.transport.connected:
-            self.log.info("Transport not connected... skipping.")
+            log.info("Transport not connected... skipping.")
             return  # transport will log warning
 
         agent_proxy = agent.get_proxy()
@@ -203,23 +258,26 @@ class FluxKeeper:
         # should this just be a task?
         await self.poll_subordinates(address, agent_proxy)
 
-        files_to_write = {}
-        files = await agent_proxy.get_all_files_crc()
-        self.log.debug(f"Agent {address} remote file CRCs: {files}")
+        files = await agent_proxy.get_all_files_crc(self.managed_files.remote_paths())
+        log.debug(f"Agent {address} remote file CRCs: {files}")
 
         if not files:
-            self.log.warn(f"Agent {address} didn't request any files... skipping!")
+            log.warn(f"Agent {address} didn't request any files... skipping!")
             await agent.transport.disconnect()
             return
 
         for file in files:
-            match_data = self.compare_files(file)
-            self.log_file_match_details(file["name"], match_data)
-            if match_data["secret"]:
-                files_to_write.update({file["name"]: match_data["secret"]})
+            file_name = Path(file["name"]).name
+            managed_file = self.managed_files.get(file_name)
+            managed_file.remote_crc = file["crc32"]
+
+            managed_file.compare_files()
+
+        files_to_write = self.managed_files.to_agent_dict()
 
         if files_to_write:
             agent_proxy.one_way = True
+            # ToDo: this should return status
             await agent_proxy.write_files(files=files_to_write)
         await agent.transport.disconnect()
 
@@ -229,7 +287,7 @@ class FluxKeeper:
     async def _poll_agents(self):
         """Checks if agents need any files delivered securely"""
         if not self.agent_ips:
-            self.log.info("No agents found... nothing to do")
+            log.info("No agents found... nothing to do")
 
         polling_tasks = []
         for address, agent in self.agents.items():
@@ -237,29 +295,13 @@ class FluxKeeper:
             polling_tasks.append(task)
         await asyncio.gather(*polling_tasks)
 
-    def log_file_match_details(self, file_name, match_data):
-        if not match_data["file_found_locally"]:
-            self.log.error(
-                f"Agent requested file {self.vault_dir}/{file_name} not found locally... skipping!"
-            )
-        elif match_data["remote_file_exists"] and match_data["secret"]:
-            self.log.info(
-                f"Agent remote file {file_name} is different that local file... sending latest data"
-            )
-        elif match_data["remote_file_exists"]:
-            self.log.info(
-                f"Agent Requested file {file_name} is up to date... skipping!"
-            )
-        elif match_data["secret"]:
-            self.log.info(f"Agent requested new file {file_name}... sending")
-
     async def enroll_agent(self, target: str, agent: RPCClient):
         await agent.transport.connect()
         if not agent.transport.connected:
-            self.log.info(f"Transport not connected for agent {target}... skipping.")
+            log.info(f"Transport not connected for agent {target}... skipping.")
             return  # transport will log warning
 
-        self.log.info(f"Enrolling agent {target}")
+        log.info(f"Enrolling agent {target}")
         proxy = agent.get_proxy()
         res = await proxy.generate_csr()
         csr_bytes = res.get("csr")
@@ -296,7 +338,7 @@ class FluxKeeper:
         # ToDo: rewrite this. Concurrency
         subordinates = await agent_proxy.get_subagents()
         sub_names = [k for k in subordinates["sub_agents"]]
-        self.log.info(f"Agent {address} has the following subordinates: {sub_names}")
+        log.info(f"Agent {address} has the following subordinates: {sub_names}")
 
         for target, payload in subordinates.get("sub_agents").items():
             role = payload.get("role")  # not implemented yet
@@ -320,7 +362,7 @@ class FluxKeeper:
                 await self.enroll_agent(target, flux_agent)
             else:
                 await self.poll_agent(target, flux_agent)
-            self.log.info("Finished poll subordinates")
+            log.info("Finished poll subordinates")
             # asyncio.create_task(self.poll_agent(target, flux_agent))
 
     # Removed this. Maybe implement again later
@@ -338,15 +380,7 @@ class FluxKeeper:
             raise AttributeError(f"Method does not exist: {e}")
 
         if func.pass_context:
-            context = FluxVaultContext(self.agents, self.log)
+            context = FluxVaultContext(self.agents)
             func = functools.partial(func, context)
-        # Todo: delete function attribute
 
         return func
-
-
-@dataclass
-class FluxVaultContext:
-    agents: dict
-    log: logging.Logger
-    storage: dict = field(default_factory=dict)

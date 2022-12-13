@@ -1,15 +1,13 @@
+"""This entire file could be loaded as a plugin or part of the existing vanity_finder plugin"""
+
 import asyncio
 import time
 from concurrent.futures import ProcessPoolExecutor
 
 from hdwallet import BIP44HDWallet
-from hdwallet.cryptocurrencies import (
-    CoinType,
-    Cryptocurrency,
-    ExtendedPrivateKey,
-    ExtendedPublicKey,
-    SegwitAddress,
-)
+from hdwallet.cryptocurrencies import (CoinType, Cryptocurrency,
+                                       ExtendedPrivateKey, ExtendedPublicKey,
+                                       SegwitAddress)
 from hdwallet.utils import generate_mnemonic, is_mnemonic
 
 

@@ -1,4 +1,4 @@
-"""Example showing how to run the keeper and check if they need any files"""
+"""Example showing how to extend the Keeper for your own needs"""
 
 import asyncio
 import logging
@@ -31,61 +31,83 @@ stream_handler.setFormatter(formatter)
 log.addHandler(stream_handler)
 
 
-@extensions.create(pass_context=True)
-async def stop_workers(ctx):
-    async def stop_worker(agent):
+def manage_transport(f):
+    async def wrapper(*args, **kwargs):
+        agent = kwargs.get("agent")
         await agent.transport.connect()
-        if not agent.transport.connected:
-            ctx.log.info("Transport not connected... skipping.")
-            return
 
-        agent_proxy = agent.get_proxy()
-        await agent_proxy.stop_workers()
+        if not agent.transport.connected:
+            log.info("Transport not connected... skipping.")
+            return {}
+
+        res = await f(*args, **kwargs)
         await agent.transport.disconnect()
 
+        return res
+
+    return wrapper
+
+
+@manage_transport
+async def stop_worker(agent):
+    agent_proxy = agent.get_proxy(plugins=["vanity_finder"])
+    await agent_proxy.vanity_finder.stop_workers()
+
+
+@extensions.create(pass_context=True)
+async def stop_workers(ctx):
     tasks = []
     for _, agent in ctx.agents.items():
-        tasks.append(asyncio.create_task(stop_worker(agent)))
+        tasks.append(asyncio.create_task(stop_worker(agent=agent)))
     await asyncio.gather(*tasks)
+
+
+@manage_transport
+async def check_worker(agent):
+    agent_proxy = agent.get_proxy(plugins=["vanity_finder"])
+    reply = await agent_proxy.vanity_finder.check_workers()
+    return reply
 
 
 @extensions.create(pass_context=True)
 async def check_workers(ctx):
-    async def check_worker(address, agent):
-        await agent.transport.connect()
-        if not agent.transport.connected:
-            ctx.log.info("Transport not connected... skipping.")
-            return
-
-        agent_proxy = agent.get_proxy()
-        reply = await agent_proxy.check_workers()
-        await agent.transport.disconnect()
-        return reply
-
     tasks = []
-    for address, agent in ctx.agents.items():
-        tasks.append(asyncio.create_task(check_worker(address, agent)))
+    for _, agent in ctx.agents.items():
+        tasks.append(asyncio.create_task(check_worker(agent=agent)))
     results = await asyncio.gather(*tasks)
     return results
 
 
 @extensions.create(pass_context=True)
 async def start_workers(ctx, passphrase, vanity):
+    @manage_transport
     async def start_worker(agent):
-        await agent.transport.connect()
-        if not agent.transport.connected:
-            ctx.log.info("Transport not connected... skipping.")
-            return
+        # plugins can be found with agent_proxy.list_server_details()
+        agent_proxy = agent.get_proxy(plugins=["vanity_finder"])
+        agent_details = await agent_proxy.list_server_details()
+        agent_working_dir = agent_details.get("working_dir")
+        file = f"{agent_working_dir}/runner"
 
-        agent_proxy = agent.get_proxy()
-        agent_proxy.one_way = True
-        await agent_proxy.run_file("runner", ["hdwallet"], passphrase, vanity)
-        agent_proxy.one_way = False
-        await agent.transport.disconnect()
+        agent_proxy.vanity_finder.one_way = True
+        await agent_proxy.vanity_finder.run_file(file, ["hdwallet"], passphrase, vanity)
+        agent_proxy.vanity_finder.one_way = False
 
     tasks = []
     for _, agent in ctx.agents.items():
-        tasks.append(asyncio.create_task(start_worker(agent)))
+        tasks.append(asyncio.create_task(start_worker(agent=agent)))
+    await asyncio.gather(*tasks)
+
+
+@extensions.create(pass_context=True)
+async def load_agents_plugins(ctx, directory):
+    @manage_transport
+    async def load_agent_plugins(agent):
+        agent_proxy = agent.get_proxy()
+        await agent_proxy.load_plugins(directory=directory)
+
+    tasks = []
+    for _, agent in ctx.agents.items():
+        tasks.append(asyncio.create_task(load_agent_plugins(agent=agent)))
     await asyncio.gather(*tasks)
 
 
@@ -108,6 +130,7 @@ async def main():
     keeper = FluxKeeper(
         extensions=extensions,
         vault_dir=".",
+        managed_files=["runner.py", "vanity_finder.py:plugins/vanity_finder.py"],
         comms_port=8888,
         agent_ips=["127.0.0.1"],
         sign_connections=True,
@@ -115,6 +138,7 @@ async def main():
     )
 
     await keeper._poll_agents()
+    await keeper.load_agents_plugins(directory="plugins")
     await keeper.start_workers(passphrase, vanity)
     await asyncio.sleep(30)
 
@@ -138,6 +162,4 @@ async def main():
         await keeper.stop_workers()
 
 
-loop = asyncio.get_event_loop()
-
-loop.run_until_complete(main())
+asyncio.run(main())

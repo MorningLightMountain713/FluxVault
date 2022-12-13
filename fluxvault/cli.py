@@ -88,6 +88,7 @@ def keeper(
         "-s",
         envvar=f"{PREFIX}_VAULT_DIR",
         show_envvar=False,
+        help="Working directory",
     ),
     comms_port: int = typer.Option(
         8888,
@@ -103,6 +104,26 @@ def keeper(
         envvar=f"{PREFIX}_APP_NAME",
         show_envvar=False,
     ),
+    managed_files: str = typer.Option(
+        "",
+        "--managed-files",
+        "-m",
+        envvar=f"{PREFIX}_MANAGED_FILES",
+        show_envvar=False,
+        help="""Comma seperated string of managed file paths.
+        
+        Local files must be a relative path (relative to vault_dir)
+        Remote files can be relative (working_dir) or absolute
+        
+        If using local / remote files, file name must match
+
+        Any remote directories will be created if they don't exist
+
+        Example:
+
+        --managed-files file1.py,file2.txt:/remote/path/file2.txt,file3.py:dir/file3.py
+        """,
+    ),
     polling_interval: int = typer.Option(
         300,
         "--polling-interval",
@@ -116,7 +137,7 @@ def keeper(
         "-o",
         envvar=f"{PREFIX}_RUN_ONCE",
         show_envvar=False,
-        help="Contact agents once and bail",
+        help="Contact agents once and exit",
     ),
     agent_ips: str = typer.Option(
         "",
@@ -159,9 +180,13 @@ def keeper(
             if store_key:
                 keyring.set_password("fluxvault_app", zelid, signing_key)
 
+    managed_files = managed_files.split(",")
+    managed_files = list(filter(None, managed_files))
+
     flux_keeper = FluxKeeper(
         vault_dir=vault_dir,
         comms_port=comms_port,
+        managed_files=managed_files,
         app_name=app_name,
         agent_ips=agent_ips,
         sign_connections=sign_connections,
@@ -226,14 +251,6 @@ def agent(
         show_envvar=False,
         help="Serve files over http (no authentication)",
     ),
-    managed_files: str = typer.Option(
-        "",
-        "--manage-files",
-        "-m",
-        envvar=f"{PREFIX}_MANAGED_FILES",
-        show_envvar=False,
-        help="Comma seperated files we want from keeper",
-    ),
     working_dir: str = typer.Option(
         "/tmp",
         "--working-dir",
@@ -277,7 +294,6 @@ def agent(
         "--subordinate",
         envvar=f"{PREFIX}_SUBORDINATE",
         show_envvar=False,
-        hidden=True,
         help="If this agent is a subordinate of another agent",
     ),
     primary_agent_name: str = typer.Option(
@@ -307,8 +323,6 @@ def agent(
 
     whitelisted_addresses = whitelisted_addresses.split(",")
     whitelisted_addresses = list(filter(None, whitelisted_addresses))
-    managed_files = managed_files.split(",")
-    managed_files = list(filter(None, managed_files))
 
     registrar = None
     if enable_registrar:
@@ -332,7 +346,6 @@ def agent(
         enable_registrar=enable_registrar,
         registrar=registrar,
         primary_agent=primary_agent,
-        managed_files=managed_files,
         working_dir=working_dir,
         whitelisted_addresses=whitelisted_addresses,
         verify_source_address=verify_source_address,

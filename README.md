@@ -1,6 +1,12 @@
 # FluxVault
 Flux Vault - load private data into a running container.
 
+* Write your own plugins
+* Encrypted communications
+* Authenticated sessions
+* Manage any file
+* Run any service
+
 This package provides a way to securely load passwords and private data into a running Flux application / container(s). All data passed into a container is encrypted, so no one can snoop on you data. However, data is not stored on disk encrypted. Please remember, the node owner still has root access to your container, and can access any files / data.
 
 If you just want to have at it - please skip to the `quickstart` section below.

@@ -1,6 +1,8 @@
 ## Full app demo
 
-This demo shows how extend both the Agent and the Keeper to meet your needs. Essentially, it's a vanity address miner. Obviously, being written in Python, it is incredibly slow and only shown as an example of what can be done. 
+A contrived HD Wallet vanity finder demo using Keeper plugins.
+
+Shows how extend both the Agent and the Keeper to meet your needs. Obviously, being written in Python, it is incredibly slow and only shown as an example of what can be done. 
 
 It is assumed that fluxvault is already installed.
 
@@ -21,9 +23,11 @@ Note, as the string gets longer, it gets exponentially harder to find.
 
 ## What is happening?
 
+- Standard Agent is started
 - Keeper checks into agent and is authenticated
+- Keeper loads vanity_finder plugin to Agent. This gives the Agent extra functionality
 - Agent then requests a file `runner.py`
-- Keeper then sends command to run this file
+- Keeper then sends command to run this file (this is extended functionality that the plugin provides)
 - Agent installs any necessary packages
 - Agent runs the file, which starts up processes (half of the available cpus)
 - Each process starts iterating through addresses trying to find a match for the vanity string

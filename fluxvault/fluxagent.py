@@ -237,14 +237,19 @@ class FluxAgent:
     async def get_file_crc(self, path: str) -> dict:
         """Open the file and compute the crc, set crc=0 if not found"""
         # ToDo: catch file PermissionError
+        p = Path(path)
+
+        if not p.is_absolute():
+            p = self.working_dir / p
+
         try:
             # Todo: brittle as
-            async with aiofiles.open(path, mode="rb") as file:
+            async with aiofiles.open(p, mode="rb") as file:
                 content = await file.read()
                 file.close()
                 crc = binascii.crc32(content)
         except FileNotFoundError:
-            log.info(f"Local file {path} not found")
+            log.info(f"Local file {p} not found")
             crc = 0
         # ToDo: Fix this
         except Exception as e:

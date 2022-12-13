@@ -8,9 +8,9 @@ version: "3.9"
 #docker compose v2:
 # docker compose up --build
 
-# to run the keeper install fluxvault and then from the top directory run:
+# to run the keeper install fluxvault and then from the top directory of this repo run:
 
-# fluxvault keeper --agent-ips 127.0.0.1 --vault-dir examples/files --sign-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --polling-interval 20
+# fluxvault keeper --agent-ips 127.0.0.1 --managed-files quotes.txt --vault-dir examples/files --sign-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --polling-interval 20
 
 # you should then get prompted for the private key.. use the following:
 
@@ -22,7 +22,7 @@ services:
     build: .
     ports:
       - "8888:8888"
-    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --registrar
+    command: fluxvault --debug agent --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --registrar
     networks:
       agent:
       internet:
@@ -32,7 +32,7 @@ services:
     build: .
     depends_on:
       - fluxagent
-    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --subordinate
+    command: fluxvault agent --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --subordinate
     networks:
       - agent
   cool_container_2:
@@ -40,7 +40,7 @@ services:
     build: .
     depends_on:
       - fluxagent
-    command: fluxvault agent --manage-files quotes.txt --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --subordinate
+    command: fluxvault agent --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM --subordinate
     networks:
       - agent
 networks:

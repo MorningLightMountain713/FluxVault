@@ -4,7 +4,7 @@
 
 A contrived HD Wallet vanity finder demo using Keeper plugins.
 
-Shows how extend both the Agent and the Keeper to meet your needs. Obviously, being written in Python, it is incredibly slow and only shown as an example of what can be done. 
+Shows how to extend both the Agent and the Keeper to meet your needs. Obviously, being written in Python, it is incredibly slow and only shown as an example of what can be done. 
 
 It is assumed that fluxvault is already installed.
 
@@ -15,6 +15,8 @@ Pick your vanity string to search addresses for. These are base58 strings so onl
 ```
 123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
 ```
+
+Note the mising I, 0, l, O
 
 An example could be: `Pip`
 

@@ -262,7 +262,7 @@ class FluxKeeper:
         log.debug(f"Agent {address} remote file CRCs: {files}")
 
         if not files:
-            log.warn(f"Agent {address} didn't request any files... skipping!")
+            log.warn(f"No files to sync specified... skipping!")
             await agent.transport.disconnect()
             return
 

@@ -163,6 +163,7 @@ def keeper(
 
     agent_ips = agent_ips.split(",")
     agent_ips = list(filter(None, agent_ips))
+    signing_key = None
 
     if sign_connections:
         if not zelid:

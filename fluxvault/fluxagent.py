@@ -71,6 +71,10 @@ class FluxAgent:
         self.primary_agent = primary_agent
         self.component_name, self.app_name = get_app_and_component_name()
 
+        if not self.signed_vault_connections and not self.verify_source_address:
+            # Must verify source address as a minimum
+            self.verify_source_address = True
+
         self.raise_on_state_errors()
         self.register_extensions()
         self.setup_registrar()
@@ -121,7 +125,7 @@ class FluxAgent:
 
         if self.verify_source_address and not self.whitelisted_addresses:
             raise ValueError(
-                "Whitelisted addresses must be provided if verifying source ip address"
+                "Whitelisted addresses must be provided if not signing connections"
             )
 
         if self.subordinate and not self.primary_agent:

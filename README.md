@@ -1,15 +1,21 @@
 # FluxVault
 Flux Vault - load private data into a running container.
 
+---
+
 * Write your own plugins
 * Encrypted communications
 * Authenticated sessions
 * Manage any file
 * Run any service
 
+---
+
 This package provides a way to securely load passwords and private data into a running Flux application / container(s). All data passed into a container is encrypted, so no one can snoop on you data. However, data is not stored on disk encrypted. Please remember, the node owner still has root access to your container, and can access any files / data.
 
 If you just want to have at it - please skip to the `quickstart` section below.
+
+---
 
 ## Overview
 
@@ -58,12 +64,10 @@ Running the agent:
 A simple agent setup would look like this: (see Agent section for more detailed explanation)
 
 ```
-fluxvault agent --whitelisted-addresses <your home ip> --managed-files secret_password.txt
+fluxvault agent --whitelisted-addresses <your home ip>
 ```
 
-This will run the `agent`, listening on port 8888, allowing the `keeper` access from your home ip address only. Once the `keeper` connects, the file `secret_password.txt` will end up in the agents working dir (`/tmp` by default) 
-
-It's then up to your application to make use of the `secret_password.txt` file.
+This will run the `agent`, listening on port 8888, allowing the `keeper` access from your home ip address only. Once the `keeper` connects, it is then able to run commands, and transfer files.
 
 A simple Dockerfile might look like this:
 
@@ -84,7 +88,7 @@ Running the container:
 Every configuration option available for `fluxvault` can either be specified on the command line or via environment variables. If using env vars, all options are prefixed with `FLUXVAULT_`. For example, to start the container above we could do the following:
 
 ```
- docker run -e FLUXVAULT_WHITELISTED_ADDRESSES=<your ip>,<your other ip> -e FLUXVAULT_MANAGED_FILES=secret_password.txt -it yourrepo/container:latest
+ docker run -e FLUXVAULT_WHITELISTED_ADDRESSES=<your ip>,<your other ip> -it yourrepo/container:latest
 ```
 
 ### Fluxvault - running as a Companion component
@@ -93,11 +97,9 @@ Add this container to your Flux application
 
 `megachips/fluxvault:latest` *TBD - update to runonflux
 
-Specify environement variables for configuration, at a minimum, you will need the following, see later sections for more info.
+Specify environment variables for configuration, at a minimum, you will need the following, see later sections for more info.
 
 FLUXVAULT_WHITELISTED_ADDRESSES - comma seperated list of ip addresses
-
-FLUXVAULT_MANAGED_FILES - comma seperated list of files you want delivered
 
 FLUXVAULT_FILESERVER - True, will enable the local http fileserver
 
@@ -122,7 +124,7 @@ Here is an example systemd service file:
 Description=Flux Vault
 
 [Service]
-ExecStart=/usr/local/bin/fluxvault keeper --vault-dir /tmp/vault --app-name <app name>
+ExecStart=/usr/local/bin/fluxvault keeper --vault-dir /tmp/vault --app-name <app name> --managed-files secret_password.txt
 
 [Install]
 WantedBy=multi-user.target
@@ -141,13 +143,13 @@ Choose a directory you want to use as your `vault` directory. For example, we wi
 Add your secret password file to the /tmp/vault directory.
 
 ```
-echo "supersecretpassword123" > /tmp/vault/secret_passwords.txt
+echo "supersecretpassword123" > /tmp/vault/secret_password.txt
 ```
 
 Start the `keeper` and connect to all agents.
 
 ```
-fluxvault keeper --vault-dir /tmp/vault --app-name <your-app-name>
+fluxvault keeper --vault-dir /tmp/vault --app-name <your-app-name> --managed-files secret_password.txt
 ```
 
 The keeper will now connect to all agents and deliver any requested files!
@@ -166,23 +168,52 @@ All options are able to be passed as an environment variable. Just prefix the op
 
   * bind_address - the address the agent listens on. 0.0.0.0 by default.
   * bind_port - the port to listen on. 8888 by default.
-  * enable_local_fileserver - for multicomponent apps. If you want to share the secret files to other components.
-  * local_fileserver_port - the port to serve files on. 2080 by default.
-  * managed_files - comma seperated string of files you want the keeper to provide to the application.
-  * working_dir - where the files will be stored locally.
+  * enable_registrar - Act as a proxy for other agents
+  * registrar_port - Port for the registrar to listen on
+  * registrar_address - Address for the registrar to bind on
+  * enable_registrar_fileserver - for multicomponent apps. If you want to share the secret files to other components.
+  * working_dir - where the files will be stored locally. (if using relative paths)
   * whitelisted_addresses - comma seperated string of ip addresses that are allowed to talk to the agent. (your home ip address)
-  * disable_authentication - Development only - don't do this on a real app.
+  * verify_source_address - matches source address to your whitelist, and denies them if they aren't on the list. Note this is False by default, but set to true if not signing connections.
+  * signed_vault_connections - Expects all Keeper connections to be signed. (authentication)
+  * zelid - Specify the zelid that is signing the connections. If not specified, the zelid of the app owner is used.
+  * subordinate - If this agent is a subordinate of another agent. (this agent registers against the main agent)
+  * primary_agent_name - The component name of the primary agent. You only need to set this if the primary agent component name differs from `fluxagent`
 
 ### Keeper specific configuration options
 
 Same as the agent - all options work as environment variables
 
+  ```
+  Special note on managed-files:
+
+  Local files must be a relative path (relative to vault_dir)
+  Remote files can be relative (working_dir) or absolute
+  
+  If using local / remote files, file name MUST match
+
+  Any remote directories will be created if they don't exist
+
+  Example:
+
+  --managed-files file1.py,file2.txt:/remote/path/file2.txt,file3.py:dir/file3.py
+
+  In the above example, the following will happen:
+
+  file1.py will be copied from the keeper vault dir to the agent working dir
+  file2.txt will be copied from the keeper vault dir to /remote/path/file2.txt on the agent. If /remote/path does not exist, it will be created.
+  file3.py will be copied from the keeper vault dir to the agent <working dir>/dir/file3.py. If dir doesn't exist in the working dir, it will be created.
+  ```
+
   * vault_dir - the directory that contains your secret files. Default to ./vault 
   * comms_port - what port to use to connect to agent. Default 8888
   * app_name - the name of your flux application (the keeper will look up your app and get the agent ip addresses)
+  * managed_files - Comma separated list of managed file paths
   * polling_interval - how often to poll agents. Default 300 seconds
   * run_once - If you don't want to poll agent and just run once
   * agent_ips - development, if specified, will try to contact addresses specified only. App name is ignored.
+  * sign-connections - Whether or not to sign outbound connections. Requires signing key
+  * zelid - This is used to associate a private key in the keychain
 
 ## Using the fluxvault library in your application
 
@@ -193,7 +224,6 @@ Here is a demo of how you may do that:
 from fluxvault import FluxAgent
 
   agent = FluxAgent(
-      managed_files=["secret_password.txt"],
       working_dir="/app/passwords",
       whitelisted_addresses=["your keeper ip address"],
   )
@@ -208,7 +238,6 @@ import asyncio
 from fluxvault import FluxAgent
 
 agent = FluxAgent(
-    managed_files=["secret_password.txt"],
     working_dir="/tmp",
     whitelisted_addresses=["your keeper ip address"],
 )
@@ -242,7 +271,7 @@ Here is an example of how to configure message signing via the CLI.
 Agent:
 
 ```
-fluxvault agent --manage-files quotes.txt --signed-vault-connections
+fluxvault agent --signed-vault-connections
 ```
 
 * Note, for development, you can pass in the Zelid on the agent if it won't be running on a Fluxnode (normally the agent would get the zelid of the app owner from the Flux network)
@@ -250,7 +279,7 @@ fluxvault agent --manage-files quotes.txt --signed-vault-connections
 Keeper:
 
 ```
-fluxvault keeper --vault-dir examples/files --sign-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM
+fluxvault keeper --managed-files secret.txt --vault-dir examples/files --sign-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM
 ```
 
 For the Keeper, you must pass in the Zelid in order to store the private key against. This means you can have multiple private keys stored securely.
@@ -285,7 +314,15 @@ When running the agent in sub-agent mode for proxying, set the `--subordinate` f
 
 There is an example of how to do this in the examples/compose/demo directory
 
-* Note, when the keeper starts, it will create a certificate authority directory in your current directory, `ca`. This has all the certificates for you agents. When these are transferred to your agent, they are help in memory. If you would like to store these so you can use them for authentication for applications (eg mongo SSL) that is entirely possible.
+* Note, when the keeper starts, it will create a certificate authority directory in your current directory, `ca`. This has all the certificates for your agents. When these are transferred to your agent, they are held in memory. If you would like to store these so you can use them for authentication for applications (eg mongo SSL),that is entirely possible.
+
+### Plugins
+
+You are able to write your own plugins and extend the functionality of both the agent and the keeper. The great thing about this is you can run a standard agent, and upgrade the agent to use a plugin on the fly from the keeper.
+
+See the full_app_demo in the examples folder for a full example
+
+There are decorators to pass in a context for the keeper, or storage to pass between agent methods. You can also managed the connection manually, or use a decorator to connect / disconnect to the agent.
 
 ## Development
 

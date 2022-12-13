@@ -1,5 +1,7 @@
 ## Full app demo
 
+** UNTESTED ON WINDOWS, MAY NOT WORK **
+
 A contrived HD Wallet vanity finder demo using Keeper plugins.
 
 Shows how extend both the Agent and the Keeper to meet your needs. Obviously, being written in Python, it is incredibly slow and only shown as an example of what can be done. 

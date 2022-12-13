@@ -154,6 +154,8 @@ fluxvault keeper --vault-dir /tmp/vault --app-name <your-app-name> --managed-fil
 
 The keeper will now connect to all agents and deliver any requested files!
 
+The way it does this is by using the `app-name` param and fetching the ip's of the nodes in question. As an alternative to this, you can specify the `--agent-ips` switch with a comma separated list of ips. eg --agent-ips 192.168.1.5,192.168.1.6
+
 By default the `keeper` will connect every 10 minutes. This is configurable.
 
 ### Global configuration options
@@ -186,6 +188,8 @@ Same as the agent - all options work as environment variables
 
   ```
   Special note on managed-files:
+
+  This is the heart of fluxvault. These are files that reside on the keeper, all paths are relative to the vault_dir variable.
 
   Local files must be a relative path (relative to vault_dir)
   Remote files can be relative (working_dir) or absolute

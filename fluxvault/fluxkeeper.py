@@ -38,7 +38,7 @@ class FluxVaultContext:
 class ManagedFile:
     local_path: Path
     remote_path: Path
-    local_workdir: Path = Path()
+    local_workdir: Path
     local_crc: int = 0
     remote_crc: int = 0
     keeper_context: bool = True
@@ -136,7 +136,7 @@ class FluxKeeper:
         self.managed_files = ManagedFileGroup()
         self.loop = asyncio.get_event_loop()
         self.protocol = JSONRPCProtocol()
-        self.vault_dir = vault_dir
+        self.vault_dir = Path(vault_dir)
 
         for file_str in managed_files:
             split_file = file_str.split(":")
@@ -146,7 +146,9 @@ class FluxKeeper:
             except IndexError:
                 # we don't have a remote path
                 remote = local
-            self.managed_files.add(ManagedFile(Path(local), Path(remote)))
+            self.managed_files.add(
+                ManagedFile(Path(local), Path(remote), self.vault_dir)
+            )
 
         self.ca = CertificateAuthority(
             ca_storage="ca", common_name="Fluxvault Keeper CA"

@@ -20,6 +20,8 @@ Note, as the string gets longer, it gets exponentially harder to find.
 
 - Start the agent first `fluxvault agent --bind-address 127.0.0.1 --signed-vault-connections --zelid 1GKugrE8cmw9NysWFJPwszBbETRLwLaLmM`
 
+* Note - by default the agent working_dir is `/tmp` on unix and `C:\TEMP` on windows - once the keeper has run, this is where the agent files will be stored (unless you specify a working dir manually)
+
 - Start the keeper (from the `keeper` directory) `python keeper.py <Vanity string>`
 
 - Watch the magic happen

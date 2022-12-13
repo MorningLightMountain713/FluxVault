@@ -47,7 +47,7 @@ class FluxAgent:
         enable_registrar: bool = False,
         registrar: FluxAgentRegistrar | None = None,
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
-        working_dir: str = "/tmp",
+        working_dir: str = tempfile.gettempdir(),
         whitelisted_addresses: list = ["127.0.0.1"],
         verify_source_address: bool = False,
         signed_vault_connections: bool = False,

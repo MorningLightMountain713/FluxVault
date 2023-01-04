@@ -4,6 +4,7 @@ import time
 
 import keyring
 import typer
+import asyncio
 
 from fluxvault import FluxAgent, FluxKeeper
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
@@ -159,6 +160,14 @@ def keeper(
         show_envvar=False,
         help="This is used to associate private key in keychain",
     ),
+    console_server: bool = typer.Option(
+        False,
+        "--console-server",
+        "-c",
+        envvar=f"{PREFIX}_CONSOLE_SERVER",
+        show_envvar=False,
+        help="Run local console server",
+    ),
 ):
 
     agent_ips = agent_ips.split(",")
@@ -192,16 +201,22 @@ def keeper(
         agent_ips=agent_ips,
         sign_connections=sign_connections,
         signing_key=signing_key,
+        console_server=console_server,
     )
 
     log = logging.getLogger("fluxvault")
 
-    while True:
-        flux_keeper.poll_all_agents()
-        if run_once:
-            break
-        log.info(f"sleeping {polling_interval} seconds...")
-        time.sleep(polling_interval)
+    async def start():
+        while True:
+            # await flux_keeper.run_agent_tasks()
+            await flux_keeper.run_agent_tasks()
+            if run_once:
+                break
+            log.info(f"sleeping {polling_interval} seconds...")
+            await asyncio.sleep(polling_interval)
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start())
 
 
 @app.command()

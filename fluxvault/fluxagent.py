@@ -8,15 +8,16 @@ import ssl
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
+import pty, subprocess
+import tarfile
 
 import aiofiles
 from aiohttp import ClientSession
 from aiotinyrpc.auth import SignatureAuthProvider
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
 from aiotinyrpc.server import RPCServer
-from aiotinyrpc.transports.socket import EncryptedSocketServerTransport
+from aiotinyrpc.transports.socket.server import EncryptedSocketServerTransport
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -70,6 +71,8 @@ class FluxAgent:
         self.verify_source_address = verify_source_address
         self.primary_agent = primary_agent
         self.component_name, self.app_name = get_app_and_component_name()
+
+        log.info(f"Component name: {self.component_name}, App name: {self.app_name}")
 
         if not self.signed_vault_connections and not self.verify_source_address:
             # Must verify source address as a minimum
@@ -142,6 +145,9 @@ class FluxAgent:
         self.extensions.add_method(self.upgrade_to_ssl)
         self.extensions.add_method(self.load_plugins)
         self.extensions.add_method(self.list_server_details)
+        self.extensions.add_method(self.connect_shell)
+        self.extensions.add_method(self.disconnect_shell)
+        self.extensions.add_method(self.get_state)
 
         # self.extensions.add_method(self.run_entrypoint)
         # self.extensions.add_method(self.extract_tar)
@@ -169,7 +175,11 @@ class FluxAgent:
 
         try:
             self.loop.run_forever()
-        finally:
+        except Exception as e:
+            # this is when child fork closes (no loop)
+            # OSError
+            pass
+        else:
             if self.enable_registrar:
                 self.loop.run_until_complete(self.registrar.cleanup())
 
@@ -199,7 +209,7 @@ class FluxAgent:
         context.load_verify_locations(cafile=ca_cert.name)
         context.check_hostname = False
         context.verify_mode = ssl.VerifyMode.CERT_REQUIRED
-        context.set_ciphers("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384")
+        # context.set_ciphers("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384")
 
         cert.close()
         key.close()
@@ -213,11 +223,11 @@ class FluxAgent:
             auth_provider=self.auth_provider,
             ssl=context,
         )
-
+        log.info(context)
         await self.rpc_server.transport.stop_server()
         log.info("Non SSL RPC server stopped")
-        self.rpc_server1 = RPCServer(transport, JSONRPCProtocol(), self.extensions)
-        self.loop.create_task(self.rpc_server1.serve_forever())
+        self.rpc_server = RPCServer(transport, JSONRPCProtocol(), self.extensions)
+        self.loop.create_task(self.rpc_server.serve_forever())
 
     def cleanup(self):
         # ToDo: look at cleanup for rpc server too
@@ -233,6 +243,27 @@ class FluxAgent:
     def get_methods(self) -> dict:
         """Returns methods available for the keeper to call"""
         return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
+
+    def get_state(self) -> dict:
+        methods = self.get_methods()
+        plugins = self.extensions.list_plugins()
+        primary_agent = self.primary_agent.to_dict() if self.primary_agent else None
+        return {
+            "methods": methods,
+            "plugins": plugins,
+            "component_name": self.component_name,
+            "app_name": self.app_name,
+            "enable_registrar": self.enable_registrar,
+            "zelid": self.zelid,
+            "working_dir": self.working_dir,
+            "subordinate": self.subordinate,
+            "signed_vault_connections": self.signed_vault_connections,
+            "bind_address": self.bind_address,
+            "bind_port": self.bind_port,
+            "whitelisted_addresses": self.whitelisted_addresses,
+            "verify_source_address": self.verify_source_address,
+            "primary_agent": primary_agent,
+        }
 
     async def get_file_crc(self, path: str) -> dict:
         """Open the file and compute the crc, set crc=0 if not found"""
@@ -311,6 +342,43 @@ class FluxAgent:
             await self.write_file(name, data)
             log.info("Writing complete")
 
+    async def connect_shell(self, peer):
+        # peer is the source ip, host
+        # json converts tuple to list
+        peer = tuple(peer)
+
+        child_pid, fd = pty.fork()
+        if child_pid == 0:
+
+            # Child process
+            while log.hasHandlers():
+                log.removeHandler(log.handlers[0])
+
+            # trying to suppress log messages?!? Suspect it is this process
+            # somehow sending data down the pipe to the remote SSL end causing
+            # problems decoding ssl every once in a while
+            try:
+                subprocess.run("zsh")
+            except:
+                pass
+
+        else:
+            # Parent process
+
+            # the peer may be the jumphost instead of actual browser,
+            # we have no way of identifying if they are a jumphost so we
+            # pass the RPCClient id of the originating request
+            try:
+                self.rpc_server.transport.attach_pty(child_pid, fd, peer)
+                await self.rpc_server.transport.proxy_pty(peer)
+            except Exception as e:
+                print(repr(e))
+
+    async def disconnect_shell(self, peer):
+        log.info(f"Disconnecting shell for peer: {peer[0]}")
+        peer = tuple(peer)  # json convert to list
+        self.rpc_server.transport.detach_pty(peer)
+
     def list_server_details(self):
         return {
             "working_dir": self.working_dir,
@@ -367,9 +435,6 @@ class FluxAgent:
                 log.error("Plugin load error... skipping")
 
     async def generate_csr(self):
-        if not self.component_name or not self.app_name:
-            self.component_name = "component1"
-            self.app_name = "testapp"
         # ToDo: this needs to include a Fluxnode identifier
         altname = f"{self.component_name}.{self.app_name}.com"
 
@@ -415,6 +480,7 @@ class FluxAgent:
         ).value.get_values_for_type(x509.DNSName)
         log.info(f"Installing cert from issuer {issuer} with Alt names {san}")
 
+        # ToDo: this timing seems a bit off?
         await self.sub_agent.update_local_agent(enrolled=True)
 
     async def upgrade_connection(self):
@@ -425,9 +491,6 @@ class FluxAgent:
         self.ca_cert = cert_bytes
 
     def extract_tar(self, file, target_dir):
-        import tarfile
-        from pathlib import Path
-
         Path(target_dir).mkdir(parents=True, exist_ok=True)
 
         try:

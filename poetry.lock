@@ -39,7 +39,7 @@ frozenlist = ">=1.1.0"
 
 [[package]]
 name = "aiotinyrpc"
-version = "0.8.2"
+version = "0.8.3"
 description = "\"An aio version of tinyrpc\""
 category = "main"
 optional = false
@@ -522,7 +522,7 @@ testing = ["flake8 (<5)", "func-timeout", "jaraco.functools", "jaraco.itertools"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "afd0e26697ed6ab2a10b5a766edae89fbc39ba0b640b6cf1cc6702fbcf60570d"
+content-hash = "c4616b478875e3865ba0b19204963f29593769b5293c7d02a2d1f238857d3b23"
 
 [metadata.files]
 aiofiles = [
@@ -623,8 +623,8 @@ aiosignal = [
     {file = "aiosignal-1.3.1.tar.gz", hash = "sha256:54cd96e15e1649b75d6c87526a6ff0b6c1b0dd3459f43d9ca11d48c339b68cfc"},
 ]
 aiotinyrpc = [
-    {file = "aiotinyrpc-0.8.2-py3-none-any.whl", hash = "sha256:cab02d4296b3ba504ba358dad8c1613ff7b7201d2053ca7842e0df9b7dfd76d3"},
-    {file = "aiotinyrpc-0.8.2.tar.gz", hash = "sha256:85706e74689da1b19d5c8a7432d4806068b5c1e2ca4ee2d8a972ead6692febc9"},
+    {file = "aiotinyrpc-0.8.3-py3-none-any.whl", hash = "sha256:f17a4554a5fa41217fb42eb13422dabc847fe3facad70cea1c19085c50d72c33"},
+    {file = "aiotinyrpc-0.8.3.tar.gz", hash = "sha256:e05140ec3304af3c20fe0fcbc7261c3c0de1f26b7c9fe9cfbb76e9d9d318726b"},
 ]
 async-timeout = [
     {file = "async-timeout-4.0.2.tar.gz", hash = "sha256:2163e1640ddb52b7a8c80d0a67a08587e5d245cc9c553a74a847056bc2976b15"},

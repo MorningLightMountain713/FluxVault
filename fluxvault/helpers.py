@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import socket
-import ssl
-from typing import Optional
+import randomname
 
 import dns.resolver
 import dns.reversename
@@ -56,4 +54,10 @@ def get_app_and_component_name(_ip: str | None = None) -> list:
     """Gets the component and app name for a given ip. If no ip is given, gets our own details"""
     ip = _ip if _ip else _get_own_ip()
     ptr = _get_ptr(ip)
-    return _parse_ptr_to_names(ptr)
+    comp, app = _parse_ptr_to_names(ptr)
+
+    if not comp or not app:
+        comp = randomname.get_name()
+        app = "testapp"
+
+    return (comp, app)

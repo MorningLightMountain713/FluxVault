@@ -5,8 +5,7 @@ import ipaddress
 import os
 from dataclasses import dataclass
 
-from aiohttp import (ClientConnectorError, ClientSession, ClientTimeout,
-                     streamer, web)
+from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, streamer, web
 
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log
@@ -19,6 +18,9 @@ class FluxPrimaryAgent:
     name: str = "fluxagent"
     port: int = 2080
     address: str | None = None
+
+    def to_dict(self):
+        return self.__dict__
 
 
 @dataclass

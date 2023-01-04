@@ -19,6 +19,7 @@ dnspython = "^2.2.1"
 rich = "^12.6.0"
 keyring = "^23.11.0"
 ownca = "^0.3.3"
+randomname = "^0.1.5"
 
 [tool.poetry.dev-dependencies]
 

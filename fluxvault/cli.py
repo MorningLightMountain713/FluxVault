@@ -143,13 +143,11 @@ def build_app_from_cli(
             obj_str = parts[0]
 
         split_obj = obj_str.split(":")
-        print("split", split_obj)
         local = Path(split_obj[0])
 
         sync_strat = None
         try:
             remote = Path(split_obj[1])
-            print("remote", remote)
             # this will break on remote paths of S, A, or C"
             if str(remote) in ["S", "A", "C"]:
                 # we don't have a remote, just a sync strat
@@ -158,8 +156,6 @@ def build_app_from_cli(
         except IndexError:
             # we don't have a remote path
             remote = local
-        print("strat", sync_strat)
-        print("remote", remote)
         if not sync_strat:
             try:
                 sync_strat = Path(split_obj[2])

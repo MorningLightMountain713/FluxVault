@@ -1,17 +1,26 @@
+import asyncio
 import getpass
 import logging
-import time
+from pathlib import Path
 
 import keyring
 import typer
-import asyncio
+import yaml
 
 from fluxvault import FluxAgent, FluxKeeper
+from fluxvault.fluxapp_config import (
+    FileSystemEntry,
+    FluxAppConfig,
+    FluxComponentConfig,
+    FluxTask,
+)
+from fluxvault.helpers import SyncStrategy
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 
 PREFIX = "FLUXVAULT"
 
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
+log = logging.getLogger("fluxvault")
 
 
 class colours:
@@ -81,16 +90,174 @@ def yes_or_no(question, default="yes"):
             print("Please respond with 'yes' or 'no' " "(or 'y' or 'n').\n")
 
 
+def get_signing_key(signing_address) -> str:
+    signing_key = keyring.get_password("fluxvault_app", signing_address)
+
+    if not signing_key:
+        signing_key = getpass.getpass(
+            f"\n{colours.OKGREEN}** WARNING **\n\nYou are about to enter your private key into a 3rd party application. Please make sure your are comfortable doing so. If you would like to review the code to make sure your key is safe... please visit https://github.com/RunOnFlux/FluxVault to validate the code.{colours.ENDC}\n\n Please enter your private key (in WIF format):\n"
+        )
+        store_key = yes_or_no(
+            "Would you like to store your private key in your device's secure store?\n\n(macOS: keyring, Windows: Windows Credential Locker, Ubuntu: GNOME keyring.\n\n This means you won't need to enter your private key every time this program is run.",
+        )
+        if store_key:
+            keyring.set_password("fluxvault_app", signing_address, signing_key)
+
+    return signing_key
+
+
+def build_app_from_cli(
+    app_name,
+    managed_objects,
+    sign_connections,
+    signing_address,
+    agent_ips,
+    run_once,
+    polling_interval,
+    comms_port,
+) -> FluxAppConfig:
+    if sign_connections:
+        signing_address = get_signing_key()
+        if not signing_address:
+            raise ValueError(
+                "signing_address must be provided if signing connections (keyring)"
+            )
+
+    app = FluxAppConfig(
+        app_name,
+        sign_connections=sign_connections,
+        signing_key=signing_address,
+        agent_ips=agent_ips,
+        run_once=run_once,
+        polling_interval=polling_interval,
+        comms_port=comms_port,
+    )
+
+    common_objects = []
+    for obj_str in managed_objects:
+        parts = obj_str.split("@")
+
+        component_name = ""
+        if len(parts) > 1:
+            component_name = parts[1]
+            obj_str = parts[0]
+
+        split_obj = obj_str.split(":")
+        print("split", split_obj)
+        local = Path(split_obj[0])
+
+        sync_strat = None
+        try:
+            remote = Path(split_obj[1])
+            print("remote", remote)
+            # this will break on remote paths of S, A, or C"
+            if str(remote) in ["S", "A", "C"]:
+                # we don't have a remote, just a sync strat
+                sync_strat = remote
+                remote = local
+        except IndexError:
+            # we don't have a remote path
+            remote = local
+        print("strat", sync_strat)
+        print("remote", remote)
+        if not sync_strat:
+            try:
+                sync_strat = Path(split_obj[2])
+            except IndexError:
+                sync_strat = "S"
+
+        match sync_strat:
+            case "S":
+                sync_strat = SyncStrategy.STRICT
+            case "A":
+                sync_strat = SyncStrategy.ALLOW_ADDS
+            case "C":
+                sync_strat = SyncStrategy.ENSURE_CREATED
+
+        if local.name != str(local):
+            log.error(f"Local file absolute path not allowed for: {local}... skipping")
+            continue
+
+        managed_object = FileSystemEntry(local, remote, sync_strategy=sync_strat)
+
+        if not component_name:
+            common_objects.append(managed_object)
+            continue
+
+        component = app.ensure_included(component_name)
+        component.file_manager.add_object(managed_object)
+
+    app.update_common_objects(common_objects)
+
+    return app
+
+
+def managed_objects_builder(files: list) -> list:
+    managed_objects = []
+    for file in files:
+        local = Path(file.get("name", "."))
+        remote = Path(file.get("remote_path", "."))
+        sync_strategy = SyncStrategy[
+            file.get("sync_strategy", SyncStrategy.STRICT.name)
+        ]
+
+        managed_object = FileSystemEntry(local, remote, sync_strategy=sync_strategy)
+        managed_objects.append(managed_object)
+    return managed_objects
+
+
+# do this as a lambda?
+# flux_tasks = []
+# map(lambda x: flux_tasks.append(FluxTask(x.get("name"), x.get("params"))), tasks)
+def tasks_builder(tasks: list) -> list:
+    flux_tasks = []
+    for task in tasks:
+        flux_task = FluxTask(task.get("name"), task.get("params"))
+        flux_tasks.append(flux_task)
+    return flux_tasks
+
+
+def build_apps_from_loadout_file(path: str) -> list:
+
+    loadout_path = Path(path)
+    apps = []
+
+    if not loadout_path.exists():
+        raise ValueError(f"Loadout path {loadout_path} doesn't exist")
+
+    with open(str(loadout_path), "r") as stream:
+        try:
+            loadout = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"loadout {loadout_path} is not parseable.\n\n{exc}")
+
+    for app_name, params in loadout.get("apps").items():
+        components = params.pop("components", [])
+        # agent_ips = params.get("agent_ips")
+        # polling_interval = params.get("polling_interval")
+        common_objects = params.pop("managed_objects", [])
+        app = FluxAppConfig(app_name, **params)
+        app.file_manager.add_objects(managed_objects_builder(common_objects))
+
+        for component_name, directives in components.items():
+            component = FluxComponentConfig(component_name)
+            for directive, items in directives.items():
+                match directive:
+                    case "working_dir":
+                        component.working_dir = items
+                    case "managed_objects":
+                        component.file_manager.add_objects(
+                            managed_objects_builder(items)
+                        )
+                    case "tasks":
+                        component.add_tasks(tasks_builder(items))
+            app.add_component(component)
+        apps.append(app)
+    return apps
+
+
 @app.command()
 def keeper(
-    vault_dir: str = typer.Option(
-        "vault",
-        "--vault-dir",
-        "-s",
-        envvar=f"{PREFIX}_VAULT_DIR",
-        show_envvar=False,
-        help="Working directory",
-    ),
     comms_port: int = typer.Option(
         8888,
         "--comms-port",
@@ -105,13 +272,27 @@ def keeper(
         envvar=f"{PREFIX}_APP_NAME",
         show_envvar=False,
     ),
-    managed_files: str = typer.Option(
-        "",
-        "--managed-files",
-        "-m",
-        envvar=f"{PREFIX}_MANAGED_FILES",
+    vault_dir: str = typer.Option(
+        None,
+        "--vault-dir",
+        "-d",
+        envvar=f"{PREFIX}_VAULT_DIR",
         show_envvar=False,
-        help="""Comma seperated string of managed file paths.
+    ),
+    loadout_path: str = typer.Option(
+        None,
+        "--loadout-path",
+        "-l",
+        envvar=f"{PREFIX}_LOADOUT_PATH",
+        show_envvar=False,
+    ),
+    managed_objects: str = typer.Option(
+        "",
+        "--managed-objects",
+        "-m",
+        envvar=f"{PREFIX}_MANAGED_OBJECTS",
+        show_envvar=False,
+        help="""Comma seperated string of managed object paths.
         
         Local files must be a relative path (relative to vault_dir)
         Remote files can be relative (working_dir) or absolute
@@ -154,69 +335,72 @@ def keeper(
         show_envvar=False,
         help="Whether or not to sign outbound connections",
     ),
-    zelid: str = typer.Option(
+    signing_address: str = typer.Option(
         "",
-        envvar=f"{PREFIX}_ZELID",
+        envvar=f"{PREFIX}_SIGNING_ADDRESS",
         show_envvar=False,
         help="This is used to associate private key in keychain",
     ),
-    console_server: bool = typer.Option(
+    gui: bool = typer.Option(
         False,
-        "--console-server",
-        "-c",
-        envvar=f"{PREFIX}_CONSOLE_SERVER",
+        "--gui",
+        "-g",
+        envvar=f"{PREFIX}_GUI",
         show_envvar=False,
-        help="Run local console server",
+        hidden=True,
+        help="Run local gui server",
     ),
 ):
 
+    if not vault_dir:
+        vault_dir = Path().home() / ".vault"
+
     agent_ips = agent_ips.split(",")
     agent_ips = list(filter(None, agent_ips))
-    signing_key = None
 
-    if sign_connections:
-        if not zelid:
-            raise ValueError("zelid must be provided if signing connections (keyring)")
+    managed_objects = managed_objects.split(",")
+    managed_objects = list(filter(None, managed_objects))
 
-        signing_key = keyring.get_password("fluxvault_app", zelid)
+    apps_config = []
 
-        if not signing_key:
-            signing_key = getpass.getpass(
-                f"\n{colours.OKGREEN}** WARNING **\n\nYou are about to enter your private key into a 3rd party application. Please make sure your are comfortable doing so. If you would like to review the code to make sure your key is safe... please visit https://github.com/RunOnFlux/FluxVault to validate the code.{colours.ENDC}\n\n Please enter your private key (in WIF format):\n"
+    # this ignores any other command line directive
+    if loadout_path:
+        configs = build_apps_from_loadout_file(loadout_path)
+        apps_config.extend(configs)
+
+    # configure single app via command line parameters, Must have managed_objects
+    elif app_name:
+        if not managed_objects:
+            raise ValueError(
+                "If running single app (if app_name is set) you must pass in managed-files via cli param, alternatively, try using a loadout"
             )
-            store_key = yes_or_no(
-                "Would you like to store your private key in your device's secure store?\n\n(macOS: keyring, Windows: Windows Credential Locker, Ubuntu: GNOME keyring.\n\n This means you won't need to enter your private key every time this program is run.",
-            )
-            if store_key:
-                keyring.set_password("fluxvault_app", zelid, signing_key)
+        config = build_app_from_cli(
+            app_name,
+            managed_objects,
+            sign_connections,
+            signing_address,
+            agent_ips,
+            run_once,
+            polling_interval,
+            comms_port,
+        )
+        apps_config.append(config)
 
-    managed_files = managed_files.split(",")
-    managed_files = list(filter(None, managed_files))
+    else:
+        raise ValueError("Either app_name or loadout_path must be specified")
+    # Make sure all params are getting passed into app config first (ports etc)
 
     flux_keeper = FluxKeeper(
+        apps_config=apps_config,
         vault_dir=vault_dir,
-        comms_port=comms_port,
-        managed_files=managed_files,
-        app_name=app_name,
-        agent_ips=agent_ips,
-        sign_connections=sign_connections,
-        signing_key=signing_key,
-        console_server=console_server,
+        gui=gui,
     )
 
-    log = logging.getLogger("fluxvault")
-
-    async def start():
-        while True:
-            # await flux_keeper.run_agent_tasks()
-            await flux_keeper.run_agent_tasks()
-            if run_once:
-                break
-            log.info(f"sleeping {polling_interval} seconds...")
-            await asyncio.sleep(polling_interval)
+    async def main():
+        await flux_keeper.manage_apps()
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(start())
+    loop.run_until_complete(main())
 
 
 @app.command()

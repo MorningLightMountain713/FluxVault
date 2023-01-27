@@ -1,6 +1,7 @@
-from aiohttp import web
 import asyncio
 from pathlib import Path
+
+from aiohttp import web
 
 
 async def index(request):

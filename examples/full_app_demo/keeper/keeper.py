@@ -57,7 +57,7 @@ async def stop_worker(agent):
 @extensions.create(pass_context=True)
 async def stop_workers(ctx):
     tasks = []
-    for _, agent in ctx.agents.items():
+    for agent in ctx.agents:
         tasks.append(asyncio.create_task(stop_worker(agent=agent)))
     await asyncio.gather(*tasks)
 
@@ -72,7 +72,7 @@ async def check_worker(agent):
 @extensions.create(pass_context=True)
 async def check_workers(ctx):
     tasks = []
-    for _, agent in ctx.agents.items():
+    for agent in ctx.agents:
         tasks.append(asyncio.create_task(check_worker(agent=agent)))
     results = await asyncio.gather(*tasks)
     return results
@@ -93,7 +93,7 @@ async def start_workers(ctx, passphrase, vanity):
         agent_proxy.vanity_finder.one_way = False
 
     tasks = []
-    for _, agent in ctx.agents.items():
+    for agent in ctx.agents:
         tasks.append(asyncio.create_task(start_worker(agent=agent)))
     await asyncio.gather(*tasks)
 
@@ -106,7 +106,7 @@ async def load_agents_plugins(ctx, directory):
         await agent_proxy.load_plugins(directory=directory)
 
     tasks = []
-    for _, agent in ctx.agents.items():
+    for agent in ctx.agents:
         tasks.append(asyncio.create_task(load_agent_plugins(agent=agent)))
     await asyncio.gather(*tasks)
 
@@ -132,12 +132,12 @@ async def main():
         vault_dir=".",
         managed_files=["runner.py", "vanity_finder.py:plugins/vanity_finder.py"],
         comms_port=8888,
-        agent_ips=["127.0.0.1"],
+        agent_ips=["192.168.4.27"],
         sign_connections=True,
         signing_key=key,
     )
 
-    await keeper._poll_agents()
+    await keeper.run_agent_tasks()
     await keeper.load_agents_plugins(directory="plugins")
     await keeper.start_workers(passphrase, vanity)
     await asyncio.sleep(30)

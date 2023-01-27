@@ -5,48 +5,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 
 from hdwallet import BIP44HDWallet
-from hdwallet.cryptocurrencies import (CoinType, Cryptocurrency,
-                                       ExtendedPrivateKey, ExtendedPublicKey,
-                                       SegwitAddress)
+from hdwallet.cryptocurrencies import FluxMainnet
 from hdwallet.utils import generate_mnemonic, is_mnemonic
-
-
-# Have to define here until new tag gets released on hdwallet (it's in master)
-class FluxMainnet(Cryptocurrency):
-
-    NAME = "Flux"
-    SYMBOL = "FLUX"
-    NETWORK = "mainnet"
-    SOURCE_CODE = "https://github.com/RunOnFlux/fluxd"
-    COIN_TYPE = CoinType({"INDEX": 19167, "HARDENED": True})
-
-    SCRIPT_ADDRESS = 0x1CBD
-    PUBLIC_KEY_ADDRESS = 0x1CB8
-    SEGWIT_ADDRESS = SegwitAddress({"HRP": None, "VERSION": 0x00})
-
-    EXTENDED_PRIVATE_KEY = ExtendedPrivateKey(
-        {
-            "P2PKH": 0x0488ADE4,
-            "P2SH": 0x0488ADE4,
-            "P2WPKH": None,
-            "P2WPKH_IN_P2SH": None,
-            "P2WSH": None,
-            "P2WSH_IN_P2SH": None,
-        }
-    )
-    EXTENDED_PUBLIC_KEY = ExtendedPublicKey(
-        {
-            "P2PKH": 0x0488B21E,
-            "P2SH": 0x0488B21E,
-            "P2WPKH": None,
-            "P2WPKH_IN_P2SH": None,
-            "P2WSH": None,
-            "P2WSH_IN_P2SH": None,
-        }
-    )
-    MESSAGE_PREFIX = "\x18Zelcash Signed Message:\n"
-    DEFAULT_PATH = f"m/44'/{str(COIN_TYPE)}/0'/0/0"
-    WIF_SECRET_KEY = 0x80
 
 
 def find_address(

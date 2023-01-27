@@ -1,6 +1,7 @@
-from fluxvault import FluxKeeper, FluxVaultExtensions
 import asyncio
 import logging
+
+from fluxvault import FluxKeeper, FluxVaultExtensions
 
 log = logging.getLogger()
 formatter = logging.Formatter(

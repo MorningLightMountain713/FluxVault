@@ -1,18 +1,19 @@
 # Standard library
 from __future__ import annotations
-import asyncio
-import socketio
 
+import asyncio
 from typing import TYPE_CHECKING
+
+import socketio
 
 # this is to prevent circular import from type checking an init
 if TYPE_CHECKING:
     from fluxvault.fluxkeeper import FluxKeeper
 
-from aiohttp import web
-
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from aiohttp import web
 
 # this package
 # from fluxvault.fluxkeeper import FluxKeeper
@@ -48,8 +49,8 @@ class FluxKeeperGui:
         self.sio.on("pty_connect", self.pty_connect, self.namespace)
         self.sio.on("pty_input", self.pty_input, self.namespace)
         self.sio.on("resize", self.resize_pty, self.namespace)
-        self.sio.on("fingerprint_agents", self.fingerprint_agents, self.namespace)
         self.sio.on("terminal_closed", self.close_terminal, self.namespace)
+
         # ToDo: maybe do something with access logs
         runner = web.AppRunner(self.app, access_log=None)
         await runner.setup()
@@ -68,7 +69,7 @@ class FluxKeeperGui:
         # ToDo: remove
         agent.sid = sid
 
-        # if not agent.transport.connected:
+        # ToDo: this could break now, since were managing auth params
         await agent.transport.connect()
 
         if agent.proxy_host_port:
@@ -116,28 +117,12 @@ class FluxKeeperGui:
 
         await transport.send_pty_resize_message(data["rows"], data["cols"])
 
-    async def network_state_update(self):
+    async def app_state_update(self, app_name, state):
         log.info("Sending network state update to browser")
-        await self.sio.emit(
-            "network_state", {"state": self.keeper.network_state}, namespace="/pty"
-        )
-
-    async def fingerprints_update(self):
-        log.info("Sending fingerprints to browser")
-        await self.sio.emit(
-            "agent_fingerprints",
-            self.keeper.fingerprints,
-            namespace="/pty",
-        )
+        await self.sio.emit("app_state", {app_name: state}, namespace="/pty")
 
     async def start_keeper(self, *args, **kwargs):
         pass
-
-    async def fingerprint_agents(self, sid, data):
-        log.info(f"fingerbanging agents")
-
-        # keeper has a callback to fingerprints_update
-        await self.keeper.fingerprint_agents()
 
     async def pty_closed(self, local_socket):
         log.info("Remote pty is closed. Disconnecting and notifying browser...")
@@ -157,3 +142,7 @@ class FluxKeeperGui:
         proxy = agent.get_proxy()
 
         await proxy.disconnect_shell(our_socket)
+
+    async def set_toast(self, toast):
+        log.info("Sending toast update to browser")
+        await self.sio.emit("toast_update", {"toast": toast}, namespace="/pty")

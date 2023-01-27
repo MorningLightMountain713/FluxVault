@@ -1,8 +1,9 @@
-from dataclasses import dataclass
-from aiohttp import web
-import socketio
 import asyncio
+from dataclasses import dataclass
 from typing import Callable
+
+import socketio
+from aiohttp import web
 
 
 @dataclass

@@ -1,15 +1,18 @@
 ---
 # example loadout for file management for keeper
 
-components:
-  mongo:
-    managed_files:
-      - name: dbpassword.txt
-        remote_path: /secrets/dbpassword.txt
-      - name: install.sh
-      - name: start_app.sh
-    tasks:
-      - name: run_file
-        params: install.sh
-      - name: run_file
-        params: start_app.sh
+apps:
+  myawesomeapp:
+    components:
+      mongo:
+        managed_files:
+          - name: dbpassword.txt
+            local_path: etc
+            remote_path: /secrets
+          - name: install.sh
+          - name: start_app.sh
+        tasks: # Not implemented yet
+          - name: run_file
+            params: [install.sh]
+          - name: run_file
+            params: [start_app.sh]

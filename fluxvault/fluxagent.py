@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import binascii
 import importlib
+import io
 import os
+import pty
 import ssl
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
-import pty, subprocess
-import tarfile
 
 import aiofiles
+import aioshutil
+from aiofiles import os as aiofiles_os
 from aiohttp import ClientSession
 from aiotinyrpc.auth import SignatureAuthProvider
 from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
@@ -100,7 +103,6 @@ class FluxAgent:
             async with session.get(
                 f"https://api.runonflux.io/apps/appowner?appname={app_name}"
             ) as resp:
-                # print(resp.status)
                 data = await resp.json()
                 zelid = data.get("data", "")
         return zelid
@@ -135,8 +137,9 @@ class FluxAgent:
             raise ValueError("Primary agent must be provided if subordinate")
 
     def register_extensions(self):
-        self.extensions.add_method(self.get_all_files_crc)
-        self.extensions.add_method(self.write_files)
+        self.extensions.add_method(self.get_all_object_hashes)
+        self.extensions.add_method(self.write_objects)
+        self.extensions.add_method(self.remove_objects)
         self.extensions.add_method(self.get_methods)
         self.extensions.add_method(self.get_subagents)
         self.extensions.add_method(self.generate_csr)
@@ -148,6 +151,7 @@ class FluxAgent:
         self.extensions.add_method(self.connect_shell)
         self.extensions.add_method(self.disconnect_shell)
         self.extensions.add_method(self.get_state)
+        self.extensions.add_method(self.get_directory_hashes)
 
         # self.extensions.add_method(self.run_entrypoint)
         # self.extensions.add_method(self.extract_tar)
@@ -171,14 +175,15 @@ class FluxAgent:
                 f"Sub agent http server running on port {self.registrar.bind_port}"
             )
 
-        self.loop.create_task(self.rpc_server.serve_forever())
+        task = self.loop.create_task(self.rpc_server.serve_forever())
 
         try:
             self.loop.run_forever()
         except Exception as e:
+            # should this be finally: ?
             # this is when child fork closes (no loop)
             # OSError
-            pass
+            task.cancel()
         else:
             if self.enable_registrar:
                 self.loop.run_until_complete(self.registrar.cleanup())
@@ -223,7 +228,6 @@ class FluxAgent:
             auth_provider=self.auth_provider,
             ssl=context,
         )
-        log.info(context)
         await self.rpc_server.transport.stop_server()
         log.info("Non SSL RPC server stopped")
         self.rpc_server = RPCServer(transport, JSONRPCProtocol(), self.extensions)
@@ -265,54 +269,116 @@ class FluxAgent:
             "primary_agent": primary_agent,
         }
 
-    async def get_file_crc(self, path: str) -> dict:
-        """Open the file and compute the crc, set crc=0 if not found"""
-        # ToDo: catch file PermissionError
+    async def crc_file(self, filename: Path, crc: int) -> int:
+        async with aiofiles.open(filename, "rb") as f:
+            data = await f.read()
+            crc = binascii.crc32(data, crc)
+
+        return crc
+
+    async def crc_directory(self, directory: Path, crc: int) -> int:
+        crc = binascii.crc32(directory.name.encode(), crc)
+        for path in sorted(directory.iterdir(), key=lambda p: str(p).lower()):
+            crc = binascii.crc32(path.name.encode(), crc)
+
+            if path.is_file():
+                crc = await self.crc_file(path, crc)
+            elif path.is_dir():
+                crc = await self.crc_directory(path, crc)
+        return crc
+
+    async def get_object_crc(self, path: str) -> int:
         p = Path(path)
 
         if not p.is_absolute():
             p = self.working_dir / p
 
-        try:
-            # Todo: brittle as
-            async with aiofiles.open(p, mode="rb") as file:
-                content = await file.read()
-                file.close()
-                crc = binascii.crc32(content)
-        except FileNotFoundError:
-            log.info(f"Local file {p} not found")
+        if not p.exists():
             crc = 0
-        # ToDo: Fix this
-        except Exception as e:
-            log.error(repr(e))
-            crc = 0
+
+        elif p.is_dir():
+            crc = await self.crc_directory(p, 0)
+
+        elif p.is_file():
+            crc = await self.crc_file(p, 0)
 
         return {"name": path, "crc32": crc}
 
-    async def get_all_files_crc(self, files) -> list:
-        """Returns the crc32 for each file that is being managed"""
-        log.info("Returning all vault file hashes")
+    async def get_all_object_hashes(self, objects: list) -> list:
+        """Returns the crc32 for each object that is being managed"""
+        log.info(f"Returning crc's for {len(objects)} object(s)")
         tasks = []
-        for file in files:
-            tasks.append(self.loop.create_task(self.get_file_crc(file)))
+        for obj in objects:
+            tasks.append(self.loop.create_task(self.get_object_crc(obj)))
         results = await asyncio.gather(*tasks)
         return results
 
-    async def write_file(self, path: str, data: str | bytes, executable: bool = False):
-        """Write a single file to disk"""
+    async def get_file_hash(self, file: Path):
+        crc = await self.crc_file(file, 0)
+        return {str(file): crc}
+
+    async def get_directory_hashes(self, dir: str):
+        """Hashes up all files in a specific directory. if
+        give relative path, out working dir is base path. Need
+        to remove this again for each hash to give back common path format"""
+        hashes = {}
+        p = Path(dir)
+        path_relative_to_workdir = False
+        try:
+            if not p.is_absolute():
+                p = self.working_dir / p
+                path_relative_to_workdir = True
+
+            if not p.exists():
+                return hashes
+
+            crc = binascii.crc32(p.name.encode())
+
+            hashes.update({str(p): crc})
+            for path in sorted(p.iterdir(), key=lambda p: str(p).lower()):
+                if path.is_dir():
+                    hashes.update(await self.get_directory_hashes(str(path)))
+
+                elif path.is_file():
+                    hashes.update(await self.get_file_hash(path))
+
+            if path_relative_to_workdir:
+                hashes = {
+                    str(Path(k).relative_to(self.working_dir)): v
+                    for k, v in hashes.items()
+                }
+        except Exception as e:
+            print(repr(e))
+            raise
+
+        return hashes
+
+    async def remove_object(self, obj: str):
+        p = Path(obj)
+
+        if not p.is_absolute():
+            p = self.working_dir / p
+
+        if p.exists():
+            if p.is_dir():
+                await aioshutil.rmtree(p)
+            elif p.is_file():
+                await aiofiles_os.remove(p)
+
+    async def write_object(self, obj: dict):
         # ToDo: brittle file path
         # ToDo: catch file PermissionError etc
 
-        # os.umask(0) - set this is for everyone but doesn't really matter here
+        executable = False  # pass this in dict in future
 
-        if isinstance(data, bytes):
+        if isinstance(obj["data"], bytes):
             mode = "wb"
-        elif isinstance(data, str):
+        elif isinstance(obj["data"], str):
             mode = "w"
         else:
             raise ValueError("Data written must be either str or bytes")
 
-        p = Path(path)
+        p = Path(obj["path"])
 
         if not p.is_absolute():
             p = self.working_dir / p
@@ -321,12 +387,28 @@ class FluxAgent:
 
         # this will make the file being written executable
         opener = self.opener if executable else None
-        try:
-            async with aiofiles.open(p, mode=mode, opener=opener) as file:
-                await file.write(data)
-        # ToDo: tighten this up
-        except Exception as e:
-            log.error(repr(e))
+
+        if obj["is_dir"]:
+            p.mkdir(parents=True, exist_ok=True)
+            if not obj["data"]:
+                return
+
+        if obj.get("uncompressed", False):
+            try:
+                async with aiofiles.open(p, mode=mode, opener=opener) as file:
+                    await file.write(obj["data"])
+            # ToDo: tighten this up
+            except Exception as e:
+                log.error(repr(e))
+
+        else:  # tarball
+            fh = io.BytesIO(obj["data"])
+            try:
+                with tarfile.open(fileobj=fh, mode="r|bz2") as tar:
+                    tar.extractall(str(p))
+                return
+            except Exception as e:
+                print(f"Tarfile error: {repr(e)}")
 
     async def get_subagents(self):
         agents = {}
@@ -334,13 +416,17 @@ class FluxAgent:
             agents = {v.dns_name: v.as_dict() for v in self.registrar.sub_agents}
         return {"sub_agents": agents}
 
-    async def write_files(self, files: dict):
+    async def write_objects(self, objects: list):
         """Will write to disk any file provided, in the format {"name": <content>}"""
         # ToDo: this should be tasks
-        for name, data in files.items():
-            log.info(f"Writing file {name}")
-            await self.write_file(name, data)
-            log.info("Writing complete")
+        for obj in objects:
+            log.info(f"Writing object {obj['path']}")
+            await self.write_object(obj)
+
+    async def remove_objects(self, objects: list):
+        for obj in objects:
+            log.info(f"Removing object {obj}")
+            await self.remove_object(obj)
 
     async def connect_shell(self, peer):
         # peer is the source ip, host
@@ -372,6 +458,7 @@ class FluxAgent:
                 self.rpc_server.transport.attach_pty(child_pid, fd, peer)
                 await self.rpc_server.transport.proxy_pty(peer)
             except Exception as e:
+                print("In connect_shell")
                 print(repr(e))
 
     async def disconnect_shell(self, peer):

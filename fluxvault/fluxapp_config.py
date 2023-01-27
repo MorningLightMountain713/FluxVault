@@ -93,7 +93,6 @@ class FileSystemEntry:
                 raise ValueError("All paths must be relative on Keeper")
 
         p = self.local_workdir / self.local_path
-        # print("local absolulte path", str(p))
 
         if not p.exists():
             p_common = self.local_workdir.parent / "common" / p.name

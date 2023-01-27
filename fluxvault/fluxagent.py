@@ -17,10 +17,10 @@ import aiofiles
 import aioshutil
 from aiofiles import os as aiofiles_os
 from aiohttp import ClientSession
-from aiotinyrpc.auth import SignatureAuthProvider
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from aiotinyrpc.server import RPCServer
-from aiotinyrpc.transports.socket.server import EncryptedSocketServerTransport
+from fluxrpc.auth import SignatureAuthProvider
+from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
+from fluxrpc.server import RPCServer
+from fluxrpc.transports.socket.server import EncryptedSocketServerTransport
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa

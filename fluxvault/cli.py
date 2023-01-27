@@ -37,7 +37,7 @@ class colours:
 
 def configure_logs(log_to_file, logfile_path, debug):
     vault_log = logging.getLogger("fluxvault")
-    aiotinyrpc_log = logging.getLogger("aiotinyrpc")
+    fluxrpc_log = logging.getLogger("fluxrpc")
     level = logging.DEBUG if debug else logging.INFO
 
     formatter = logging.Formatter(
@@ -45,7 +45,7 @@ def configure_logs(log_to_file, logfile_path, debug):
     )
 
     vault_log.setLevel(level)
-    aiotinyrpc_log.setLevel(level)
+    fluxrpc_log.setLevel(level)
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
@@ -53,9 +53,9 @@ def configure_logs(log_to_file, logfile_path, debug):
     file_handler.setFormatter(formatter)
 
     vault_log.addHandler(stream_handler)
-    aiotinyrpc_log.addHandler(stream_handler)
+    fluxrpc_log.addHandler(stream_handler)
     if log_to_file:
-        aiotinyrpc_log.addHandler(file_handler)
+        fluxrpc_log.addHandler(file_handler)
         vault_log.addHandler(file_handler)
 
 

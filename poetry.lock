@@ -137,15 +137,15 @@ files = [
 frozenlist = ">=1.1.0"
 
 [[package]]
-name = "aiotinyrpc"
+name = "fluxrpc"
 version = "0.8.3"
 description = "\"An aio version of tinyrpc\""
 category = "main"
 optional = false
 python-versions = ">=3.8,<4.0"
 files = [
-    {file = "aiotinyrpc-0.8.3-py3-none-any.whl", hash = "sha256:f17a4554a5fa41217fb42eb13422dabc847fe3facad70cea1c19085c50d72c33"},
-    {file = "aiotinyrpc-0.8.3.tar.gz", hash = "sha256:e05140ec3304af3c20fe0fcbc7261c3c0de1f26b7c9fe9cfbb76e9d9d318726b"},
+    {file = "fluxrpc-0.8.3-py3-none-any.whl", hash = "sha256:f17a4554a5fa41217fb42eb13422dabc847fe3facad70cea1c19085c50d72c33"},
+    {file = "fluxrpc-0.8.3.tar.gz", hash = "sha256:e05140ec3304af3c20fe0fcbc7261c3c0de1f26b7c9fe9cfbb76e9d9d318726b"},
 ]
 
 [package.dependencies]

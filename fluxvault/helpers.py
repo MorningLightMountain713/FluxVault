@@ -10,8 +10,8 @@ import dns.resolver
 import dns.reversename
 import keyring
 import randomname
-from aiotinyrpc.auth import SignatureAuthProvider
-from aiotinyrpc.transports.socket.symbols import (
+from fluxrpc.auth import SignatureAuthProvider
+from fluxrpc.transports.socket.symbols import (
     AUTH_ADDRESS_REQUIRED,
     AUTH_DENIED,
     NO_SOCKET,

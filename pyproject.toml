@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fluxvault"
-version = "0.6.0"
+version = "0.6.1"
 description = "A system to load secrets into Flux applications"
 authors = ["Tom Moulton <tom@moulton.us>", "<David White <dr.white.nz@gmail.com>"]
 license = "MIT"
@@ -9,7 +9,8 @@ homepage = "https://runonflux.io"
 
 [tool.poetry.dependencies]
 python = "^3.8"
-aiotinyrpc = {version = "^0.8.3", extras = ["socket"]}
+fluxrpc = {version = "^0.9.0", extras = ["socket"]}
+fluxwallet = "^0.0.1"
 requests = "^2.28.1"
 aiofiles = "^22.1.0"
 aioshutil = "^1.2"
@@ -22,11 +23,14 @@ keyring = "^23.11.0"
 ownca = "^0.3.3"
 randomname = "^0.1.5"
 python-socketio= "^5.7.2"
+show-in-file-manager= "^1.1.4"
 
 [tool.isort]
 profile = "black"
 
 [tool.poetry.dev-dependencies]
+black = "^22.12.0"
+isort = "^5.11.4"
 
 [tool.poetry.scripts]
 fluxvault = "fluxvault.cli:entrypoint"

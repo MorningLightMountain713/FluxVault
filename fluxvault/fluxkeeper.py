@@ -10,11 +10,11 @@ from typing import Callable
 # 3rd party
 import aiohttp
 import cryptography
-from aiotinyrpc.auth import SignatureAuthProvider
-from aiotinyrpc.client import RPCClient
-from aiotinyrpc.exc import MethodNotFoundError
-from aiotinyrpc.protocols.jsonrpc import JSONRPCProtocol
-from aiotinyrpc.transports.socket.client import EncryptedSocketClientTransport
+from fluxrpc.auth import SignatureAuthProvider
+from fluxrpc.client import RPCClient
+from fluxrpc.exc import MethodNotFoundError
+from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
+from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
 from cryptography.x509.oid import NameOID
 from ownca import CertificateAuthority
 from ownca.exceptions import OwnCAInvalidCertificate

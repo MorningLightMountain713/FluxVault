@@ -1,4 +1,4 @@
-from aiotinyrpc.dispatch import RPCDispatcher
+from fluxrpc.dispatch import RPCDispatcher
 
 
 class FluxVaultExtensions(RPCDispatcher):

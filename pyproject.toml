@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "fluxvault"
-version = "0.6.1"
+version = "0.6.2"
 description = "A system to load secrets into Flux applications"
-authors = ["Tom Moulton <tom@moulton.us>", "<David White <dr.white.nz@gmail.com>"]
+authors = ["<David White <dr.white.nz@gmail.com>", "Tom Moulton <tom@moulton.us>"]
 license = "MIT"
 repository = "https://github.com/RunOnFlux/FluxVault.git"
 homepage = "https://runonflux.io"

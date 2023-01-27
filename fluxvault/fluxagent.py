@@ -179,12 +179,8 @@ class FluxAgent:
 
         try:
             self.loop.run_forever()
-        except Exception as e:
-            # should this be finally: ?
-            # this is when child fork closes (no loop)
-            # OSError
+        finally:
             task.cancel()
-        else:
             if self.enable_registrar:
                 self.loop.run_until_complete(self.registrar.cleanup())
 

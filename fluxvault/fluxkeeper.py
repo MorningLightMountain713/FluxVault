@@ -321,39 +321,89 @@ class FluxAppManager:
 
         return (candidates, missing, modified)
 
+    def get_filtered_object_deltas(
+        self,
+        managed_object: FileSystemEntry,
+        local_hashes: dict[str, int],
+        remote_hashes: dict[str, int],
+    ) -> tuple[list[Path], list[Path], int, int, int]:
+        (
+            candidates,
+            missing_count,
+            modified_count,
+        ) = self.get_missing_or_modified_objects(
+            managed_object, local_hashes, remote_hashes
+        )
+
+        extra_objects, unknown_count = self.get_extra_objects(
+            managed_object, local_hashes, remote_hashes
+        )
+        return (candidates, extra_objects, missing_count, modified_count, unknown_count)
+
+    def prepare_objects_for_writing(
+        self, managed_object: FileSystemEntry, objects_to_add: list[Path]
+    ) -> dict:
+        objects_to_write = []
+        # fs_entry is in common form
+        for fs_entry in objects_to_add:
+            abs_local_path = managed_object.local_workdir / fs_entry
+
+            size = size_of_object(abs_local_path)
+
+            # ToDo: configurable
+            ONE_MB = 1048576 * 1
+            uncompressed = False
+            if abs_local_path.is_file():
+                if size > ONE_MB:
+                    log.info(
+                        f"File {fs_entry} with size {bytes_to_human(size)} is larger than uncompressed limit... compressing"
+                    )
+                    data = tar_object(abs_local_path)
+                else:  # < 1MB
+                    uncompressed = True
+                    with open(abs_local_path, "rb") as f:
+                        data = f.read()
+
+            elif abs_local_path.is_dir():
+                data = tar_object(abs_local_path)
+
+            path_str = str(managed_object.remote_path / fs_entry)
+            objects_to_write.append(
+                {
+                    "path": path_str,
+                    "data": data,
+                    "is_dir": abs_local_path.is_dir(),
+                    "uncompressed": uncompressed,
+                }
+            )
+            return objects_to_write
+
     @manage_transport
     async def sync_objects(self, agent):
         log.debug(f"Contacting Agent {agent.id} to check if files required")
-        # component_config = self.app_config.merge_global_into_component(agent.id[2])
-
+        # ToDo: fix formatting nightmare between local / common / remote
         component_config = self.app_config.get_component(agent.id[2])
         remote_paths = []
+
         if not component_config:
             log.warn(
                 f"No config found for component {agent.id[2]}, this component will only get globally specified files"
             )
         else:
-            # await component_config.file_manager.flatten_dirs()
             remote_paths.extend(component_config.file_manager.expanded_remote_paths())
 
-        # await self.app_config.file_manager.flatten_dirs()
-        # remote_paths.extend(self.app_config.file_manager.absolute_remote_paths())
-
         agent_proxy = agent.get_proxy()
-        # these get returned in whatever format we gave in remote_paths
-        objects = await agent_proxy.get_all_object_hashes(remote_paths)
+        fs_objects = await agent_proxy.get_all_object_hashes(remote_paths)
 
-        log.debug(f"Agent {agent.id} remote file CRCs: {objects}")
+        log.debug(f"Agent {agent.id} remote file CRCs: {fs_objects}")
 
-        if not objects:
+        if not fs_objects:
             log.warn(f"No objects to sync for {agent.id} specified... skipping!")
             return
 
         objects_to_write = []
-        for obj in objects:
+        for obj in fs_objects:
             remote_path = Path(obj["name"])
-            # this is broken. They may not have had a component config and just using global files
-            # or maybe just make it so you have to specify a component
             managed_object = (
                 component_config.file_manager.get_object_by_remote_path(remote_path)
                 if component_config
@@ -389,24 +439,26 @@ class FluxAppManager:
                 remote_hashes = await agent_proxy.get_directory_hashes(remote_path)
                 local_hashes = managed_object.get_directory_hashes()
 
-                candidates, missing, modified = self.get_missing_or_modified_objects(
-                    managed_object, local_hashes, remote_hashes
-                )
-
-                extra_objects, unknown = self.get_extra_objects(
-                    managed_object, local_hashes, remote_hashes
+                (
+                    objects_to_add,
+                    objects_to_remove,
+                    missing_count,
+                    modified_count,
+                    unknown_count,
+                ) = self.get_filtered_object_deltas(
+                    self, managed_object, local_hashes, remote_hashes
                 )
 
                 log.info(
-                    f"{missing} missing object(s), {modified} modified object(s) and {unknown} extra object(s)... fixing"
+                    f"{missing_count} missing object(s), {modified_count} modified object(s) and {unknown_count} extra object(s)... fixing"
                 )
 
                 if (
                     managed_object.sync_strategy == SyncStrategy.STRICT
-                    and extra_objects
+                    and objects_to_remove
                 ):
                     # we need to remove extra objects
-                    to_delete = [str(x) for x in extra_objects]
+                    to_delete = [str(x) for x in objects_to_remove]
                     await agent_proxy.remove_objects(to_delete)
                     log.info(
                         f"Sync strategy set to {SyncStrategy.STRICT.name}, deleting extra objects..."
@@ -415,50 +467,19 @@ class FluxAppManager:
                     managed_object.validated_remote_crc = managed_object.remote_crc
 
                 log.info(
-                    f"Deltas resolved... {len(candidates)} object(s) need to be resynced"
+                    f"Deltas resolved... {len(objects_to_add)} object(s) need to be resynced"
                 )
 
-                # candidate is in common form
-                for candidate in candidates:
-                    abs_local_path = managed_object.local_workdir / candidate
+                objects_to_write.extend(
+                    self.prepare_objects_for_writing(managed_object, objects_to_add)
+                )
 
-                    size = size_of_object(abs_local_path)
-
-                    # ToDo: configurable
-                    ONE_MB = 1048576 * 1
-                    uncompressed = False
-                    if abs_local_path.is_file():
-                        if size > ONE_MB:
-                            log.info(
-                                f"File {candidate} with size {bytes_to_human(size)} is larger than uncompressed limit... compressing"
-                            )
-                            data = tar_object(abs_local_path)
-                        else:  # < 1MB
-                            uncompressed = True
-                            with open(abs_local_path, "rb") as f:
-                                data = f.read()
-
-                    elif abs_local_path.is_dir():
-                        data = tar_object(abs_local_path)
-
-                    path_str = str(managed_object.remote_path / candidate)
-
-                    objects_to_write.append(
-                        {
-                            "path": path_str,
-                            "data": data,
-                            "is_dir": abs_local_path.is_dir(),
-                            "uncompressed": uncompressed,
-                        }
-                    )
                 managed_object.in_sync = True
                 managed_object.remote_object_exists = True
-                managed_object.created = True
 
         # this is now files only
         objects_to_write.extend(component_config.file_manager.objects_to_agent_list())
 
-        # print("o2w", objects_to_write)
         if objects_to_write:
             agent_proxy.notify()
             # ToDo: this should return status

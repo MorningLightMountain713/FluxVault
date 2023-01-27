@@ -43,6 +43,8 @@
 # If a file isn't found on a component, it will try the global files. So in the above, where you are merging in
 # files on components, you can just stick the one copy of the file in the common directory
 
+# If you want your component to receive global files only, it must still have an entry in the components secion
+# this can be as simple as adding a mapping like  `mycomponent: {}`
 defaults: &defaults
   - name: crankyseagull
     remote_path: /tmp/jumbo

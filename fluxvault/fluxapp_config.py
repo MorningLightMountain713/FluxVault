@@ -17,9 +17,13 @@ class FluxTask:
 
 @dataclass
 class FileSystemEntry:
+    is_dir: bool
     local_path: Path
-    remote_path: Path
-    local_workdir: Path = field(default_factory=Path)
+    fake_root: bool
+    is_empty: bool | None = None
+    remote_prefix: Path | None = None
+    local_workdir: Path | None = None
+    remote_workdir: Path | None = None
     local_crc: int = 0
     remote_crc: int = 0
     keeper_context: bool = True
@@ -30,14 +34,55 @@ class FileSystemEntry:
     file_data: bytes = b""
     sync_strategy: SyncStrategy = SyncStrategy.STRICT
 
-    def is_dir(self) -> bool:
-        return (self.local_workdir / self.local_path).is_dir()
+    # def is_dir(self) -> bool:
+    #     return (self.local_workdir / self.local_path).is_dir()
 
-    def expanded_remote_path(self) -> str:
+    @property
+    def absolute_local_path(self) -> Path:
+        return self.local_workdir / self.local_path
+
+    def is_remote_prefix_absolute(self) -> bool:
+        return self.remote_prefix.is_absolute() if self.remote_prefix else False
+
+    # def local_absolute_from_remote_absolute(self, path: Path):
+
+    @property
+    def absolute_remote_path(self) -> Path:
+        expanded_remote = (
+            self.remote_prefix / self.local_path
+            if self.remote_prefix
+            else self.local_path
+        )
         return (
-            str(self.remote_path / self.local_path)
-            if self.local_path != self.remote_path
-            else str(self.local_path)
+            self.remote_workdir / expanded_remote
+            if not expanded_remote.is_absolute()
+            else expanded_remote
+        )
+
+    @property
+    def absolute_remote_dir(self) -> Path:
+        match self.remote_prefix:
+            case x if x and x.is_absolute():
+                return x
+            case x if x:
+                return self.remote_workdir / self.remote_prefix
+            case x if not x:
+                return self.remote_workdir
+
+        # return (
+        #     self.remote_workdir / self.remote_prefix
+        #     if self.remote_prefix and not self.remote_prefix.is_absolute()
+        #     else self.remote_prefix
+        # )
+
+    def is_empty_dir(self) -> bool:
+        return not any((self.local_workdir / self.local_path).iterdir())
+
+    def expanded_remote_path(self) -> Path:
+        return (
+            self.remote_prefix / self.local_path
+            if self.remote_prefix
+            else self.local_path
         )
 
     def crc_file(self, filename: Path, crc: int) -> int:
@@ -95,11 +140,12 @@ class FileSystemEntry:
         p = self.local_workdir / self.local_path
 
         if not p.exists():
-            p_common = self.local_workdir.parent / "common" / p.name
+            # check if object exists in app common dir
+            common_path = self.local_workdir.parent / "common_files"
+            p_common = common_path / p.name
 
             if (p_common).exists():
-
-                self.local_workdir = self.local_workdir.parent / "common"
+                self.local_workdir = common_path
                 log.info(
                     f"Managed object {str(p)} not found locally, using file from common directory"
                 )
@@ -115,6 +161,8 @@ class FileSystemEntry:
 
         self.local_object_exists = True
         if p.is_file():
+            if p.stat().st_size == 0:
+                self.is_empty = True
             self.local_crc = self.crc_file(p, 0)
         elif p.is_dir():
             self.local_crc = self.crc_directory(p, 0)
@@ -124,8 +172,8 @@ class FileSystemEntry:
             return
 
         path = self.local_path
-        if self.local_path != self.remote_path:
-            path = self.remote_path / self.local_path
+        if self.remote_prefix:
+            path = self.remote_prefix / self.local_path
         if not self.remote_crc:  # remote file crc is 0 if it doesn't exist
             self.remote_object_exists = False
             if self.local_crc:
@@ -159,7 +207,8 @@ class FileSystemEntry:
 @dataclass
 class FileSystemeGroup:
     managed_objects: list[FileSystemEntry] = field(default_factory=list)
-    root_dir: Path = field(default_factory=Path)
+    working_dir: Path = field(default_factory=Path)
+    remote_workdir: Path = field(default_factory=Path)
     flattened: bool = False
 
     def __iter__(self):
@@ -169,6 +218,7 @@ class FileSystemeGroup:
     def filter_hierarchy(
         cls, current_path: Path, existing_paths: list[Path]
     ) -> list[Path]:
+        # this needs heavy testing
         for existing_path in existing_paths.copy():
             if current_path.is_relative_to(existing_path):
                 # our ancestor is already in the list. We will get replaced
@@ -183,17 +233,16 @@ class FileSystemeGroup:
 
         return existing_paths
 
-    def expanded_remote_paths(self) -> list[str]:
-        return [
-            str(x.remote_path / x.local_path)
-            if x.local_path != x.remote_path
-            else str(x.local_path)
-            for x in self.managed_objects
-        ]
+    def absolute_remote_dirs(self) -> list[Path]:
+        return [x.absolute_remote_path for x in self.managed_objects if x.is_dir]
+
+    def absolute_remote_paths(self) -> list[str]:
+        return [str(x.absolute_remote_path) for x in self.managed_objects]
 
     def merge_config(self, objects):
         for obj in objects:
             if isinstance(obj, FileSystemEntry):
+                obj.remote_workdir = self.remote_workdir
                 self.managed_objects.append(obj)
             else:
                 log.error(
@@ -205,89 +254,31 @@ class FileSystemeGroup:
             self.add_object(obj)
 
     def add_object(self, obj: FileSystemEntry):
-        obj.local_workdir = self.root_dir
+        if not obj.local_workdir:
+            obj.local_workdir = self.working_dir
         self.managed_objects.append(obj)
 
     def get_object_by_remote_path(self, remote: Path) -> FileSystemEntry:
-        for obj in self.managed_objects:
-            path = (
-                obj.remote_path / obj.local_path
-                if obj.local_path != obj.remote_path
-                else obj.local_path
-            )
+        for fs_object in self.managed_objects:
+            path = fs_object.absolute_remote_path
 
             if path == remote:
-                return obj
+                return fs_object
 
     def get_all_objects(self) -> list[FileSystemEntry]:
         return self.managed_objects
 
-    # ToDo: Rename
-    def objects_to_agent_list(self) -> list:
-        # ToDo: Composition
-        objects = []
+    def update_paths(self, local: Path, remote: Path | None = None):
+        self.working_dir = local
+        self.remote_workdir = remote
         for obj in self.managed_objects:
-            if obj.local_object_exists and (
-                not obj.remote_object_exists or not obj.in_sync
-            ):
-                if (
-                    obj.remote_object_exists
-                    and obj.sync_strategy == SyncStrategy.ENSURE_CREATED
-                ):
-                    continue
+            if not obj.fake_root:
+                obj.local_workdir = self.working_dir / "files_only"
+                if remote:
+                    obj.remote_workdir = remote
 
-                path_str = (
-                    str(obj.remote_path / obj.local_path)
-                    if obj.local_path != obj.remote_path
-                    else str(obj.local_path)
-                )
-                uncompressed = False
-                is_dir = False
-
-                abs_local_path = obj.local_workdir / obj.local_path
-                if not obj.is_dir():
-                    ONE_MB = 1048576 * 1
-
-                    size = size_of_object(abs_local_path)
-                    if size > ONE_MB:
-                        log.info(
-                            f"File {obj.local_path} with size {bytes_to_human(size)} is larger than uncompressed limit... compressing"
-                        )
-                        data = tar_object(abs_local_path)
-                    else:  # < 1MB
-                        uncompressed = True
-                        with open(abs_local_path, "rb") as f:
-                            data = f.read()
-
-                if obj.is_dir():
-                    is_dir = True
-                    is_empty = not any((abs_local_path).iterdir())
-                    if is_empty:
-                        data = ""
-                    else:  # we need to tar up son
-                        fh = io.BytesIO()
-                        # lol, hope the files aren't too big, or, you got plenty of ram
-                        with tarfile.open(fileobj=fh, mode="w|bz2") as tar:
-                            tar.add(
-                                self.root_dir / obj.local_path,
-                                # arcname=obj.local_path.name,
-                                arcname="",
-                            )
-                        data = fh.getvalue()
-                objects.append(
-                    {
-                        "path": path_str,
-                        "data": data,
-                        "is_dir": is_dir,
-                        "uncompressed": uncompressed,
-                    }
-                )
-        return objects
-
-    def update_root_dir(self, dir: Path):
-        self.root_dir = dir
+    def validate_local_objects(self):
         for obj in self.managed_objects:
-            obj.local_workdir = self.root_dir
             obj.validate_local_object()
 
 
@@ -297,14 +288,17 @@ class FluxComponentConfig:
     file_manager: FileSystemeGroup = field(default_factory=FileSystemeGroup)
     tasks: list[FluxTask] = field(default_factory=list)
     root_dir: Path = field(default_factory=Path)
-    working_dir: Path = Path("/tmp")
+    local_working_dir: Path = Path()
+    remote_working_dir: Path = Path("/tmp")
+    directories_built: bool = False
 
-    def update_root_dir(self, dir: Path):
-        # change name to update dirs
-        # root dir referes to where the physical files are
-        # working dir is where the remote end puts them
-        self.root_dir = dir
-        self.file_manager.update_root_dir(self.root_dir)
+    def update_paths(self, dir: Path):
+        # mixing in remote path here
+        self.local_working_dir = dir
+        self.file_manager.update_paths(self.local_working_dir, self.remote_working_dir)
+
+    def validate_local_objects(self):
+        self.file_manager.validate_local_objects()
 
     def add_tasks(self, tasks: list):
         for task in tasks:
@@ -317,6 +311,50 @@ class FluxComponentConfig:
         for task in self.tasks:
             if task.name == name:
                 return task
+
+    # def get_dirs(self) -> list:
+    #     return self.file_manager.get_dirs()
+
+    def build_catalogue(self):
+        fake_root = self.local_working_dir / "fake_root"
+
+        for f in fake_root.iterdir():
+            log.info(f"Root object: {f}")
+
+        fs_objects = fake_root.glob("**/*")
+
+        files_in_root = any(x.is_file() for x in fake_root.iterdir())
+
+        if files_in_root:
+            raise ValueError(
+                "Files at top level not allowed in fake_root, use a directory (remember to check for hidden files"
+            )
+
+        for fs_object in fs_objects:
+            is_empty = False
+            is_dir = False
+
+            # fake_path = "/" / fs_object.relative_to(fake_root)
+            if fs_object.is_dir():
+                print("IS_DIR", fs_object)
+                is_dir = True
+                empty_dir = not any(fs_object.iterdir())
+                if empty_dir:
+                    is_empty = True
+
+            relative_path = fs_object.relative_to(fake_root)
+
+            managed_object = FileSystemEntry(
+                is_dir=is_dir,
+                local_path=relative_path,
+                fake_root=True,
+                is_empty=is_empty,
+                # this would be "/" outside testing
+                remote_prefix=Path("/tmp/fake_root"),
+                local_workdir=fake_root,
+            )
+            print(managed_object)
+            self.file_manager.add_object(managed_object)
 
 
 @dataclass
@@ -365,8 +403,26 @@ class FluxAppConfig:
     def update_common_objects(self, files: list[FileSystemEntry]):
         self.file_manager.add_objects(files)
 
-    def update_root_dir(self, dir: Path):
-        self.root_dir = dir
+    def update_paths(self, root_app_dir: Path):
         for component in self.components:
-            component.update_root_dir(self.root_dir / component.name)
-        self.file_manager.update_root_dir(self.root_dir / "common")
+            component.update_paths(root_app_dir / "components" / component.name)
+        self.file_manager.update_paths(root_app_dir / "common_files")
+
+    def validate_local_objects(self):
+        for component in self.components:
+            component.validate_local_objects()
+        self.file_manager.validate_local_objects()
+
+    def build_catalogue(self):
+        # * = optional
+        # get all files / dirs from chroot
+        for component in self.components:
+            component.build_catalogue()
+        # files in chroot are not allowed. Must start with folder, then files / folders etc
+        # maybe also disable some tld folders like /dev.
+        # group them by common ancestor
+        # Add each common ancestor as a managed_object (files and dirs)
+        # confirm files in vault exist (or not) validate local file
+        # get size of all files *
+        # get size of all dirs (calculate from files) *
+        ...

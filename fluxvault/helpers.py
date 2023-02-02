@@ -106,6 +106,7 @@ def human_to_bytes(size: str):
 
 
 def tar_object(dir_or_file: Path) -> bytes:
+    log.info(f"About to tar {dir_or_file}")
     fh = io.BytesIO()
     # lol, hope the files aren't too big, or, you got plenty of ram
     with tarfile.open(fileobj=fh, mode="w|bz2") as tar:
@@ -113,6 +114,7 @@ def tar_object(dir_or_file: Path) -> bytes:
             dir_or_file,
             arcname="",
         )
+    log.info("Tarring complete")
     return fh.getvalue()
 
 

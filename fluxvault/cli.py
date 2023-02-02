@@ -152,10 +152,10 @@ def build_app_from_cli(
             if str(remote) in ["S", "A", "C"]:
                 # we don't have a remote, just a sync strat
                 sync_strat = remote
-                remote = local
+                remote = None
         except IndexError:
             # we don't have a remote path
-            remote = local
+            remote = None
         if not sync_strat:
             try:
                 sync_strat = Path(split_obj[2])
@@ -170,11 +170,17 @@ def build_app_from_cli(
             case "C":
                 sync_strat = SyncStrategy.ENSURE_CREATED
 
-        if local.name != str(local):
+        if local.is_absolute():
             log.error(f"Local file absolute path not allowed for: {local}... skipping")
             continue
 
-        managed_object = FileSystemEntry(local, remote, sync_strategy=sync_strat)
+        managed_object = FileSystemEntry(
+            is_dir=False,
+            local_path=local,
+            fake_root=False,
+            remote_prefix=remote,
+            sync_strategy=sync_strat,
+        )
 
         if not component_name:
             common_objects.append(managed_object)
@@ -191,13 +197,19 @@ def build_app_from_cli(
 def managed_objects_builder(files: list) -> list:
     managed_objects = []
     for file in files:
-        local = Path(file.get("name", "."))
-        remote = Path(file.get("remote_path", "."))
+        local = Path(file.get("name"))
+        remote = Path(file.get("remote_prefix")) if file.get("remote_prefix") else None
         sync_strategy = SyncStrategy[
             file.get("sync_strategy", SyncStrategy.STRICT.name)
         ]
 
-        managed_object = FileSystemEntry(local, remote, sync_strategy=sync_strategy)
+        managed_object = FileSystemEntry(
+            is_dir=False,
+            local_path=local,
+            fake_root=False,
+            remote_prefix=remote,
+            sync_strategy=sync_strategy,
+        )
         managed_objects.append(managed_object)
     return managed_objects
 
@@ -239,8 +251,10 @@ def build_apps_from_loadout_file(path: str) -> list:
             component = FluxComponentConfig(component_name)
             for directive, items in directives.items():
                 match directive:
-                    case "working_dir":
-                        component.working_dir = items
+                    case "remote_working_dir":
+                        if not Path(items).is_absolute():
+                            raise ValueError(f"Remote workdir {items} is not absolute")
+                        component.remote_working_dir = items
                     case "managed_objects":
                         component.file_manager.add_objects(
                             managed_objects_builder(items)
@@ -447,14 +461,6 @@ def agent(
         show_envvar=False,
         help="Serve files over http (no authentication)",
     ),
-    working_dir: str = typer.Option(
-        "/tmp",
-        "--working-dir",
-        "-i",
-        envvar=f"{PREFIX}_WORKING_DIR",
-        show_envvar=False,
-        help="Where files will be stored",
-    ),
     whitelisted_addresses: str = typer.Option(
         "",
         "--whitelist-addresses",
@@ -542,7 +548,6 @@ def agent(
         enable_registrar=enable_registrar,
         registrar=registrar,
         primary_agent=primary_agent,
-        working_dir=working_dir,
         whitelisted_addresses=whitelisted_addresses,
         verify_source_address=verify_source_address,
         signed_vault_connections=signed_vault_connections,

@@ -1,4 +1,7 @@
 # Standard library
+
+# So you don't have to forward reference in typing own class. See FsEntry
+from __future__ import annotations
 import asyncio
 import functools
 import shutil
@@ -6,12 +9,16 @@ from dataclasses import dataclass, field
 from functools import reduce
 from pathlib import Path
 from typing import Callable
+import aiofiles
+from enum import Enum
+import time
+
 
 # 3rd party
 import aiohttp
 import cryptography
 from fluxrpc.auth import SignatureAuthProvider
-from fluxrpc.client import RPCClient
+from fluxrpc.client import RPCClient, RPCProxy
 from fluxrpc.exc import MethodNotFoundError
 from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
@@ -33,6 +40,36 @@ from fluxvault.helpers import (
     tar_object,
 )
 from fluxvault.log import log
+
+
+@dataclass
+class SyncRequest:
+    path: str
+    data: bytes
+    is_dir: bool
+    uncompressed: bool
+
+    def serialize(self):
+        return self.__dict__
+
+
+class FsType(Enum):
+    DIRECTORY = 1
+    FILE = 2
+    UNKNOWN = 3
+
+
+@dataclass
+class FsEntry:
+    fs_type: FsType
+    path: Path
+    size: int
+    children: list[FsEntry] = field(default_factory=list)
+
+    def __str__(self):
+        decendants = [str(x) for x in self.children]
+        decendants_str = "\n\t".join(decendants)
+        return f"<FsEntry type: {self.fs_type}, size: {self.size} path: {self.path}\n\t{decendants_str}"
 
 
 @dataclass
@@ -92,7 +129,9 @@ class FluxKeeper:
 
     def configure_apps(self):
         for app_config in self.apps_config:
-            app_config.update_root_dir(self.vault_dir / app_config.name)
+            app_config.update_paths(self.vault_dir / app_config.name)
+            app_config.build_catalogue()
+            app_config.validate_local_objects()
             flux_app = FluxAppManager(self, app_config)
             self.managed_apps.append(flux_app)
 
@@ -237,7 +276,7 @@ class FluxAppManager:
         return self.keeper.loop.run_until_complete(self._get_agents_methods())
 
     @manage_transport
-    async def get_agent_method(self, agent: RPCClient):
+    async def get_agent_methods(self, agent: RPCClient):
         agent_proxy = agent.get_proxy()
         methods = await agent_proxy.get_methods()
 
@@ -248,7 +287,7 @@ class FluxAppManager:
         each agent"""
         tasks = []
         for agent in self.agents:
-            task = asyncio.create_task(self.get_agent_method(agent))
+            task = asyncio.create_task(self.get_agent_methods(agent))
             tasks.append(task)
 
         results = await asyncio.gather(*tasks)
@@ -271,13 +310,22 @@ class FluxAppManager:
         for remote_name in remote_hashes:
             remote_name = Path(remote_name)
 
-            with_remote_prefix = str(
-                remote_name.relative_to(managed_object.remote_path)
-            )
+            relative_path = str(remote_name.relative_to(managed_object.remote_prefix))
 
-            local_name = local_hashes.get(with_remote_prefix, None)
+            # this won't happen anymore. Remote prefix will always be absolute
+            # for a directory (only get this via chroot config)
+            # if managed_object.is_remote_prefix_absolute():
+            #     relative_path = str(
+            #         remote_name.relative_to(managed_object.remote_prefix)
+            #     )
+            # else:
+            #     relative_path = str(
+            #         remote_name.relative_to(managed_object.remote_workdir)
+            #     )
 
-            if not local_name:
+            local_name = local_hashes.get(relative_path, None)
+
+            if local_name is None:
                 count += 1
                 if not extras:
                     extras.append(remote_name)
@@ -300,127 +348,217 @@ class FluxAppManager:
         modified = 0
         candidates: list[Path] = []
 
-        for name, local_crc in local_hashes.items():
+        for local_path, local_crc in local_hashes.items():
+            remote_absolute = managed_object.absolute_remote_dir / local_path
             # these local hashes have been formatted in "common" format
-            name = Path(name)
+            local_path = Path(local_path)
 
-            remote_crc = remote_hashes.get(str(managed_object.remote_path / name), None)
-            if not remote_crc:
+            # this should always be found, we asked for the hash.
+            remote_crc = remote_hashes.get(str(remote_absolute), None)
+            if remote_crc is None:  # 0 means empty file. Should just hash the filename
                 missing += 1
 
             elif remote_crc != local_crc:
                 modified += 1
 
-            if not remote_crc or remote_crc != local_crc:
-                # if we are the only candidate, our name is relative to ourself so we just continue
-                if not candidates:
-                    candidates.append(name)
-
-                # it will work without returning candidates here, but more clear this way
-                candidates = FileSystemeGroup.filter_hierarchy(name, candidates)
+            if remote_crc is None or remote_crc != local_crc:
+                candidates.append(local_path)
 
         return (candidates, missing, modified)
 
-    def get_filtered_object_deltas(
+    def resolve_object_deltas(
         self,
         managed_object: FileSystemEntry,
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
-    ) -> tuple[list[Path], list[Path], int, int, int]:
-        (
-            candidates,
-            missing_count,
-            modified_count,
-        ) = self.get_missing_or_modified_objects(
+    ) -> tuple[list[Path], list[Path]]:
+        candidates, missing, modified = self.get_missing_or_modified_objects(
             managed_object, local_hashes, remote_hashes
         )
 
-        extra_objects, unknown_count = self.get_extra_objects(
+        extra_objects, unknown = self.get_extra_objects(
             managed_object, local_hashes, remote_hashes
         )
-        return (candidates, extra_objects, missing_count, modified_count, unknown_count)
 
-    def prepare_objects_for_writing(
-        self, managed_object: FileSystemEntry, objects_to_add: list[Path]
+        log.info(
+            f"{missing} missing object(s), {modified} modified object(s) and {unknown} extra object(s)... fixing"
+        )
+        return (candidates, extra_objects)
+
+    # async def stream_file(self, local_path, remote_path, agent_proxy: RPCProxy):
+    #     eof = False
+    #     start = time.time()
+    #     async with aiofiles.open(local_path, "rb") as f:
+    #         while True:
+    #             if eof:
+    #                 break
+
+    #             # 50Mb
+    #             MAX_READ = 1048576 * 50
+    #             # data = await f.read(MAX_READ)
+    #             # print(f"acutal read data:{bytes_to_human(len(data))}")
+
+    #             # if not data or len(data) < MAX_READ:
+    #             #     eof = True
+    #             # log.debug(f"writing {bytes_to_human(len(data))} for file {remote_path}")
+    #             agent_proxy.notify()
+    #             eof = await agent_proxy.write_object(
+    #                 str(remote_path), False, await f.read(MAX_READ), MAX_READ
+    #             )
+    #     end = time.time()
+    #     log.info(f"File transfer took: {end - start} seconds")
+
+    async def write_objects(
+        self,
+        agent_proxy: RPCProxy,
+        managed_object: FileSystemEntry,
+        objects_to_add: list[Path],
     ) -> dict:
-        objects_to_write = []
-        # fs_entry is in common form
+        MAX_INBAND_FILESIZE = 1048576 * 50
+        inband = False
+        to_stream = []
+
+        # the objects to add - we don't know if they're dirs or files
+
+        size = sum(
+            (managed_object.local_workdir / f).stat().st_size
+            for f in objects_to_add
+            if (managed_object.local_workdir / f).is_file()
+        )
+        log.info(f"Sending {bytes_to_human(size)} across {len(objects_to_add)} files")
+
+        if size < MAX_INBAND_FILESIZE:
+            inband = True
+
         for fs_entry in objects_to_add:
             abs_local_path = managed_object.local_workdir / fs_entry
 
-            size = size_of_object(abs_local_path)
+            abs_remote_path = str(managed_object.absolute_remote_dir / fs_entry)
 
-            # ToDo: configurable
-            ONE_MB = 1048576 * 1
-            uncompressed = False
-            if abs_local_path.is_file():
-                if size > ONE_MB:
-                    log.info(
-                        f"File {fs_entry} with size {bytes_to_human(size)} is larger than uncompressed limit... compressing"
-                    )
-                    data = tar_object(abs_local_path)
-                else:  # < 1MB
-                    uncompressed = True
-                    with open(abs_local_path, "rb") as f:
-                        data = f.read()
+            if abs_local_path.is_dir():
+                # Only need to do for empty dirs but currently doing on all dirs (wasteful as they will get created anyways)
+                await agent_proxy.write_object(abs_remote_path, True, b"")
+            elif abs_local_path.is_file():
+                # read whole file in one go as it's less than 50Mb
+                if inband:
+                    async with aiofiles.open(abs_local_path, "rb") as f:
+                        await agent_proxy.write_object(
+                            abs_remote_path, False, await f.read()
+                        )
+                    continue
+                else:
+                    to_stream.append((abs_local_path, abs_remote_path))
+        if to_stream:
+            transport = agent_proxy.get_transport()
+            await transport.stream_files(to_stream)
 
-            elif abs_local_path.is_dir():
-                data = tar_object(abs_local_path)
+    async def resolve_file_state(
+        self, managed_object: FileSystemEntry, agent_proxy: RPCProxy
+    ):
+        abs_local_path = managed_object.absolute_local_path
 
-            path_str = str(managed_object.remote_path / fs_entry)
-            objects_to_write.append(
-                {
-                    "path": path_str,
-                    "data": data,
-                    "is_dir": abs_local_path.is_dir(),
-                    "uncompressed": uncompressed,
-                }
+        size = size_of_object(abs_local_path)
+        log.info(
+            f"File {managed_object.local_path} with size {bytes_to_human(size)} is about to be transferred"
+        )
+        # this seems a bit strange but writing directory uses the same interface
+        # and they don't know who the file names are, the just have the associated
+        # managed_object
+        await self.write_objects(
+            agent_proxy, managed_object, [managed_object.local_path]
+        )
+
+        managed_object.in_sync = True
+        managed_object.remote_object_exists = True
+
+    async def resolve_directory_state(
+        self, managed_object: FileSystemEntry, agent_proxy: RPCProxy
+    ) -> dict:
+        remote_path = str(managed_object.absolute_remote_path)
+
+        # this is different from the global get_all_object_hashes - this adds
+        # all the hashes together, get_directory_hashes keeps them seperate
+        remote_hashes = await agent_proxy.get_directory_hashes(remote_path)
+        local_hashes = managed_object.get_directory_hashes()
+        # these are in remote absolute form
+        objects_to_add, objects_to_remove = self.resolve_object_deltas(
+            managed_object, local_hashes, remote_hashes
+        )
+
+        if managed_object.sync_strategy == SyncStrategy.STRICT and objects_to_remove:
+            # we need to remove extra objects
+            # ToDo: sort serialization so you can pass in paths etc
+            to_delete = [str(x) for x in objects_to_remove]
+            await agent_proxy.remove_objects(to_delete)
+            log.info(
+                f"Sync strategy set to {SyncStrategy.STRICT.name}, deleting extra objects: {to_delete}"
             )
-            return objects_to_write
+        elif SyncStrategy.ALLOW_ADDS:
+            managed_object.validated_remote_crc = managed_object.remote_crc
+
+        log.info(
+            f"Deltas resolved... {len(objects_to_add)} object(s) need to be resynced: {objects_to_add}"
+        )
+
+        await self.write_objects(agent_proxy, managed_object, objects_to_add)
+
+        managed_object.in_sync = True
+        managed_object.remote_object_exists = True
 
     @manage_transport
-    async def sync_objects(self, agent):
+    async def sync_objects(self, agent: RPCClient):
         log.debug(f"Contacting Agent {agent.id} to check if files required")
         # ToDo: fix formatting nightmare between local / common / remote
         component_config = self.app_config.get_component(agent.id[2])
-        remote_paths = []
+
+        # BUILD DIRECTORIES FIRST!!!!
 
         if not component_config:
+            # each component must be specified
             log.warn(
                 f"No config found for component {agent.id[2]}, this component will only get globally specified files"
             )
-        else:
-            remote_paths.extend(component_config.file_manager.expanded_remote_paths())
+            return
+
+        remote_paths = component_config.file_manager.absolute_remote_paths()
+        remote_dirs = component_config.file_manager.absolute_remote_dirs()
 
         agent_proxy = agent.get_proxy()
-        fs_objects = await agent_proxy.get_all_object_hashes(remote_paths)
 
-        log.debug(f"Agent {agent.id} remote file CRCs: {fs_objects}")
+        # if not component_config.directories_built:
+        #     dirs = [{"path": x, "is_dir": False, "data": b""} for x in remote_dirs]
+        #     await agent_proxy.write_objects(dirs)
+        #     component_config.directories_built = True
 
-        if not fs_objects:
+        remote_fs_objects = await agent_proxy.get_all_object_hashes(remote_paths)
+        log.debug(f"Agent {agent.id} remote file CRCs: {remote_fs_objects}")
+
+        if not remote_fs_objects:
             log.warn(f"No objects to sync for {agent.id} specified... skipping!")
             return
 
-        objects_to_write = []
-        for obj in fs_objects:
-            remote_path = Path(obj["name"])
-            managed_object = (
-                component_config.file_manager.get_object_by_remote_path(remote_path)
-                if component_config
-                else None
+        for remote_fs_object in remote_fs_objects:
+            remote_path = Path(remote_fs_object["name"])
+            managed_object = component_config.file_manager.get_object_by_remote_path(
+                remote_path
             )
-            # print("managed object!!!!", managed_object)
 
             if not managed_object:
                 log.warn(f"managed object: {remote_path} not found in component config")
                 return
 
-            managed_object.remote_crc = obj["crc32"]
+            managed_object.remote_crc = remote_fs_object["crc32"]
             managed_object.compare_objects()
+
+            if not managed_object.local_object_exists:
+                log.warn(
+                    f"Remote object exists but local doesn't: {managed_object.local_path}. Local workdir: {managed_object.local_workdir}"
+                )
+                continue
 
             if (
                 managed_object.sync_strategy == SyncStrategy.ALLOW_ADDS
-                and managed_object.is_dir()
+                and managed_object.is_dir
                 and not managed_object.in_sync
                 and managed_object.validated_remote_crc == managed_object.remote_crc
             ):
@@ -428,63 +566,24 @@ class FluxAppManager:
 
             if (
                 managed_object.sync_strategy == SyncStrategy.ENSURE_CREATED
-                and managed_object.is_dir()
+                and managed_object.is_dir
                 and managed_object.remote_object_exists
             ):
                 continue
 
-            if not managed_object.in_sync and managed_object.is_dir():
-                remote_path = managed_object.expanded_remote_path()
-                # these are in our format (I think) so managed_object.remote_path / x
-                remote_hashes = await agent_proxy.get_directory_hashes(remote_path)
-                local_hashes = managed_object.get_directory_hashes()
+            if (
+                managed_object.is_dir
+                and managed_object.is_empty_dir()
+                and managed_object.local_crc == managed_object.remote_crc
+            ):
+                continue
 
-                (
-                    objects_to_add,
-                    objects_to_remove,
-                    missing_count,
-                    modified_count,
-                    unknown_count,
-                ) = self.get_filtered_object_deltas(
-                    self, managed_object, local_hashes, remote_hashes
-                )
+            if not managed_object.in_sync and managed_object.is_dir:
+                await self.resolve_directory_state(managed_object, agent_proxy)
 
-                log.info(
-                    f"{missing_count} missing object(s), {modified_count} modified object(s) and {unknown_count} extra object(s)... fixing"
-                )
-
-                if (
-                    managed_object.sync_strategy == SyncStrategy.STRICT
-                    and objects_to_remove
-                ):
-                    # we need to remove extra objects
-                    to_delete = [str(x) for x in objects_to_remove]
-                    await agent_proxy.remove_objects(to_delete)
-                    log.info(
-                        f"Sync strategy set to {SyncStrategy.STRICT.name}, deleting extra objects..."
-                    )
-                elif SyncStrategy.ALLOW_ADDS:
-                    managed_object.validated_remote_crc = managed_object.remote_crc
-
-                log.info(
-                    f"Deltas resolved... {len(objects_to_add)} object(s) need to be resynced"
-                )
-
-                objects_to_write.extend(
-                    self.prepare_objects_for_writing(managed_object, objects_to_add)
-                )
-
-                managed_object.in_sync = True
-                managed_object.remote_object_exists = True
-
-        # this is now files only
-        objects_to_write.extend(component_config.file_manager.objects_to_agent_list())
-
-        if objects_to_write:
-            agent_proxy.notify()
-            # ToDo: this should return status
-            await agent_proxy.write_objects(objects=objects_to_write)
-            # agent_proxy.one_way = False
+            if not managed_object.in_sync and not managed_object.is_dir:
+                print("RESOLVE FILE STATE", managed_object)
+                await self.resolve_file_state(managed_object, agent_proxy)
 
     def poll_all_agents(self):
         self.keeper.loop.run_until_complete(self.run_agent_tasks())

@@ -47,36 +47,39 @@
 # this can be as simple as adding a mapping like  `mycomponent: {}`
 defaults: &defaults
   - name: crankyseagull
-    remote_path: /tmp/jumbo
+    remote_prefix: /tmp/jumbo
 apps:
   gravyboat:
-    agent_ips: [172.26.26.194]
-    polling_interval: 20
+    agent_ips: [192.168.4.27]
+    polling_interval: 60
     managed_objects:
       - name: chud.txt
         # this remote path is absolute, so the final path on the agent will be /tmp/chud.txt
-        remote_path: /tmp/
+        remote_prefix: /tmp/
       - name: chumgo.txt
-      # notice this remote_path is relative, this will be relative to the agents working dir
+      # notice this remote_prefix is relative, this will be relative to the agents working dir
       # absolute path will be /{working_dir}/chunk/chumgo.txt (by default, the working dir is /tmp)
-        remote_path: chunk/
+        remote_prefix: chunk/
     components:
-      127.0.0.1: # this would normally be a friendly component name, but on my test machine, just using ip
-        # these are specific to a component
-        working_dir: "/tmp"
+      # 127.0.0.1: # this would normally be a friendly component name, but on my test machine, just using ip
+      #   # these are specific to a component
+      #   working_dir: "/tmp"
+      #   managed_objects:
+      #     - name: blah.txt
+      #       remote_prefix: /tmp/
+      #     - name: quotes.txt
+      #     - name: dogs
+      #     - name: racing
+      #       sync_strategy: ENSURE_CREATED
+      fluxagent: # this is a component name
+        remote_working_dir: "/tmp/rangi"
         managed_objects:
           - name: blah.txt
-            remote_path: /tmp/
-          - name: quotes.txt
-          - name: dogs
-          - name: racing
-            sync_strategy: ENSURE_CREATED
-      fluxagent: # this is a component name
-        managed_objects:
-          - <<: *defaults # Mapping merge operator, this adds the above defaults here
-          - name: racing
-            remote_path: /tmp/sally/
-            sync_strategy: ALLOW_ADDS
+          # - <<: *defaults # Mapping merge operator, this adds the above defaults here
+          # - name: racing
+          #   remote_prefix: /tmp/sally/
+          #   sync_strategy: ALLOW_ADDS
+          # - name: 
         # managed_tasks: NOT IMPLEMENTED (YET)
 
 
@@ -98,3 +101,8 @@ apps:
 # fluxvault keeper --app-name gravyboat --agent-ips 192.168.4.27 \
 # --managed-objects chud.txt:/tmp/,chumgo.txt:chunk/,blah.txt:/tmp/@127.0.0.1,quotes.txt@127.0.0.1,dogs@127.0.0.1,racing:C@127.0.0.1,crankyseagull:/tmp/jumbo@fluxagent,racing:/tmp/sally/:A@fluxagent \
 #  --polling-interval 20
+
+
+# fluxvault keeper --app-name gravyboat --agent-ips 192.168.4.27 \
+# --managed-objects chud.txt:/tmp/,chumgo.txt:chunk/,blah.txt:/tmp/@127.0.0.1,quotes.txt@127.0.0.1,dogs@127.0.0.1,racing:C@127.0.0.1,crankyseagull:/tmp/jumbo@fluxagent,racing:/tmp/sally/:A@fluxagent,VSCode-darwin-universal.zip@fluxagent,ubu/ubuntu-22.04.1-live-server-amd64.iso@fluxagent \
+ # --polling-interval 20

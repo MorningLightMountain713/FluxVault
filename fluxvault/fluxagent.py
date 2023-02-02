@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
+import typing
 
 import aiofiles
 import aioshutil
@@ -32,7 +33,7 @@ from cryptography.hazmat.primitives.serialization import (
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.helpers import get_app_and_component_name
+from fluxvault.helpers import get_app_and_component_name, bytes_to_human
 from fluxvault.log import log
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
 
@@ -51,7 +52,7 @@ class FluxAgent:
         enable_registrar: bool = False,
         registrar: FluxAgentRegistrar | None = None,
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
-        working_dir: str = tempfile.gettempdir(),
+        # working_dir: str = tempfile.gettempdir(),
         whitelisted_addresses: list = ["127.0.0.1"],
         verify_source_address: bool = False,
         signed_vault_connections: bool = False,
@@ -64,7 +65,7 @@ class FluxAgent:
         self.extensions = extensions
         self.loop = asyncio.get_event_loop()
         self.zelid = zelid
-        self.working_dir = working_dir
+        # self.working_dir = working_dir
         self.subordinate = subordinate
         self.registrar = registrar
         self.signed_vault_connections = signed_vault_connections
@@ -74,6 +75,7 @@ class FluxAgent:
         self.verify_source_address = verify_source_address
         self.primary_agent = primary_agent
         self.component_name, self.app_name = get_app_and_component_name()
+        self.file_handles: dict = {}
 
         log.info(f"Component name: {self.component_name}, App name: {self.app_name}")
 
@@ -123,10 +125,10 @@ class FluxAgent:
 
     def raise_on_state_errors(self):
         """Minimal tests to ensure we are good to run"""
-        try:
-            os.listdir(self.working_dir)
-        except Exception as e:
-            raise FluxAgentException(f"Error accessing working directory: {e}")
+        # try:
+        #     os.listdir(self.working_dir)
+        # except Exception as e:
+        #     raise FluxAgentException(f"Error accessing working directory: {e}")
 
         if self.verify_source_address and not self.whitelisted_addresses:
             raise ValueError(
@@ -138,7 +140,7 @@ class FluxAgent:
 
     def register_extensions(self):
         self.extensions.add_method(self.get_all_object_hashes)
-        self.extensions.add_method(self.write_objects)
+        self.extensions.add_method(self.write_object)
         self.extensions.add_method(self.remove_objects)
         self.extensions.add_method(self.get_methods)
         self.extensions.add_method(self.get_subagents)
@@ -152,9 +154,7 @@ class FluxAgent:
         self.extensions.add_method(self.disconnect_shell)
         self.extensions.add_method(self.get_state)
         self.extensions.add_method(self.get_directory_hashes)
-
         # self.extensions.add_method(self.run_entrypoint)
-        # self.extensions.add_method(self.extract_tar)
 
     async def get_auth_provider(self):
         auth_provider = None
@@ -255,7 +255,7 @@ class FluxAgent:
             "app_name": self.app_name,
             "enable_registrar": self.enable_registrar,
             "zelid": self.zelid,
-            "working_dir": self.working_dir,
+            # "working_dir": self.working_dir,
             "subordinate": self.subordinate,
             "signed_vault_connections": self.signed_vault_connections,
             "bind_address": self.bind_address,
@@ -286,8 +286,8 @@ class FluxAgent:
     async def get_object_crc(self, path: str) -> int:
         p = Path(path)
 
-        if not p.is_absolute():
-            p = self.working_dir / p
+        # if not p.is_absolute():
+        #     p = self.working_dir / p
 
         if not p.exists():
             crc = 0
@@ -319,11 +319,11 @@ class FluxAgent:
         to remove this again for each hash to give back common path format"""
         hashes = {}
         p = Path(dir)
-        path_relative_to_workdir = False
+        # path_relative_to_workdir = False
         try:
-            if not p.is_absolute():
-                p = self.working_dir / p
-                path_relative_to_workdir = True
+            # if not p.is_absolute():
+            #     p = self.working_dir / p
+            #     path_relative_to_workdir = True
 
             if not p.exists():
                 return hashes
@@ -338,11 +338,11 @@ class FluxAgent:
                 elif path.is_file():
                     hashes.update(await self.get_file_hash(path))
 
-            if path_relative_to_workdir:
-                hashes = {
-                    str(Path(k).relative_to(self.working_dir)): v
-                    for k, v in hashes.items()
-                }
+            # if path_relative_to_workdir:
+            #     hashes = {
+            #         str(Path(k).relative_to(self.working_dir)): v
+            #         for k, v in hashes.items()
+            #     }
         except Exception as e:
             print(repr(e))
             raise
@@ -352,8 +352,8 @@ class FluxAgent:
     async def remove_object(self, obj: str):
         p = Path(obj)
 
-        if not p.is_absolute():
-            p = self.working_dir / p
+        # if not p.is_absolute():
+        #     p = self.working_dir / p
 
         if p.exists():
             if p.is_dir():
@@ -361,63 +361,79 @@ class FluxAgent:
             elif p.is_file():
                 await aiofiles_os.remove(p)
 
-    async def write_object(self, obj: dict):
+    async def write_objects(self, objects: list):
+        for obj in objects:
+            log.info(f"Writing object {obj['path']}")
+            await self.write_object(**obj)
+
+    async def write_object(self, path, is_dir, data) -> bool:
         # ToDo: brittle file path
         # ToDo: catch file PermissionError etc
-
+        log.info(
+            f"In write object RPC method, writing: {bytes_to_human(len(data))} Path: {path}"
+        )
         executable = False  # pass this in dict in future
 
-        if isinstance(obj["data"], bytes):
+        p = Path(path)
+
+        # if not p.is_absolute():
+        #     p = self.working_dir / p
+
+        # p.parent.mkdir(parents=True, exist_ok=True)
+
+        if is_dir:
+            p.mkdir(parents=True, exist_ok=True)
+            return
+
+        if isinstance(data, bytes):
             mode = "wb"
-        elif isinstance(obj["data"], str):
+        elif isinstance(data, str):
             mode = "w"
         else:
             raise ValueError("Data written must be either str or bytes")
 
-        p = Path(obj["path"])
-
-        if not p.is_absolute():
-            p = self.working_dir / p
-
-        p.parent.mkdir(parents=True, exist_ok=True)
-
-        # this will make the file being written executable
         opener = self.opener if executable else None
+        try:
+            async with aiofiles.open(p, mode=mode, opener=opener) as file:
+                await file.write(data)
+        # ToDo: tighten this up
+        except Exception as e:
+            print("exception opening / writing file")
+            log.error(repr(e))
 
-        if obj["is_dir"]:
-            p.mkdir(parents=True, exist_ok=True)
-            if not obj["data"]:
-                return
+        # else:  # tarball
+        #     fh = io.BytesIO(obj["data"])
+        #     try:
+        #         with tarfile.open(fileobj=fh, mode="r|bz2") as tar:
+        #             tar.extractall(str(p))
+        #         return
+        #     except Exception as e:
+        #         print(f"Tarfile error: {repr(e)}")
 
-        if obj.get("uncompressed", False):
-            try:
-                async with aiofiles.open(p, mode=mode, opener=opener) as file:
-                    await file.write(obj["data"])
-            # ToDo: tighten this up
-            except Exception as e:
-                log.error(repr(e))
+    # async def handle_file_stream(
+    #     self, path: Path, mode: str, executable: bool, data: bytes, eof: bool
+    # ):
+    #     if path not in self.file_handles:
+    #         print(f"New file to write received {path}")
+    #         # this will make the file being written executable
+    #         opener = self.opener if executable else None
+    #         self.file_handles[path] = await aiofiles.open(path, mode, opener=opener)
+    #         # tar = tarfile.open(fileobj=self.fh, mode="r|bz2")
+    #         # asyncio.create_task(self.write_tarfile(msg.path, tar))
 
-        else:  # tarball
-            fh = io.BytesIO(obj["data"])
-            try:
-                with tarfile.open(fileobj=fh, mode="r|bz2") as tar:
-                    tar.extractall(str(p))
-                return
-            except Exception as e:
-                print(f"Tarfile error: {repr(e)}")
+    #     # this has to be first so empty files created
+    #     await self.file_handles[path].write(data)
+
+    #     if eof:
+    #         await self.file_handles[path].close()
+    #         del self.file_handles[path]
+    #         return
 
     async def get_subagents(self):
         agents = {}
         if self.registrar:
             agents = {v.dns_name: v.as_dict() for v in self.registrar.sub_agents}
         return {"sub_agents": agents}
-
-    async def write_objects(self, objects: list):
-        """Will write to disk any file provided, in the format {"name": <content>}"""
-        # ToDo: this should be tasks
-        for obj in objects:
-            log.info(f"Writing object {obj['path']}")
-            await self.write_object(obj)
 
     async def remove_objects(self, objects: list):
         for obj in objects:
@@ -436,9 +452,6 @@ class FluxAgent:
             while log.hasHandlers():
                 log.removeHandler(log.handlers[0])
 
-            # trying to suppress log messages?!? Suspect it is this process
-            # somehow sending data down the pipe to the remote SSL end causing
-            # problems decoding ssl every once in a while
             try:
                 subprocess.run("zsh")
             except:
@@ -464,7 +477,7 @@ class FluxAgent:
 
     def list_server_details(self):
         return {
-            "working_dir": self.working_dir,
+            # "working_dir": self.working_dir,
             "plugins": self.extensions.list_plugins(),
             "registrar_enabled": self.enable_registrar,
         }
@@ -472,8 +485,8 @@ class FluxAgent:
     async def load_plugins(self, directory: str):
         p = Path(directory)
 
-        if not p.is_absolute():
-            p = self.working_dir / p
+        # if not p.is_absolute():
+        #     p = self.working_dir / p
 
         log.info(f"loading plugins from directory {p}")
 
@@ -572,17 +585,6 @@ class FluxAgent:
     async def install_ca_cert(self, cert_bytes: bytes):
         log.info("Installing CA cert")
         self.ca_cert = cert_bytes
-
-    def extract_tar(self, file, target_dir):
-        Path(target_dir).mkdir(parents=True, exist_ok=True)
-
-        try:
-            tar = tarfile.open(file)
-            tar.extractall(target_dir)
-            tar.close()
-        # ToDo: Fix
-        except Exception as e:
-            log.error(repr(e))
 
     async def run_entrypoint(self, entrypoint: str):
         # ToDo: don't use shell

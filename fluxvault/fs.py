@@ -8,8 +8,50 @@ from dataclasses import dataclass, field
 from jinja2 import Environment, BaseLoader
 import aiofiles
 from fluxvault.log import log
+import binascii
 
 BUFFERSIZE = 1048576 * 50
+
+### BUILD NOTES ###
+
+# File or dir
+# └── = last file no more dirs
+# ├── = last dir no files
+
+# Depth
+# "│   "
+# "│   │   "
+# "│   │   "
+# "│   │   │   "
+
+# if last dir at depth:
+# └── = dir
+# direct children files have "    " instead of "|   " for parent
+
+# any child depths (greater than current depth) have
+# "    " instead of "│   " at left
+
+# "    " = spacer
+# "|   " = ancestor line
+
+# is parent last sibling? Yes Then spacer at parent depth -1
+
+# slots. Each height has depth -1 slots
+
+# slots are either spacers or ancestors
+
+# eg
+
+# spacer ancestor
+# spacer ancestor ancestor spacer
+
+### /BUILD NOTES ###
+
+
+class FileTooLargeError(Exception):
+    """"""
+
+    ...
 
 
 class bcolors:
@@ -38,12 +80,7 @@ class FsType(Enum):
     UNKNOWN = 3
 
 
-class FileTooLargeError(Exception):
-    """"""
-
-    ...
-
-
+# these need work. There's still 2 variables to define and model
 tree_symbols = {
     "root_path": lambda size, path: f"{bytes_to_human(size)} {bcolors.OKBLUE}{path}{bcolors.ENDC}",
     "dir_terminal": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
@@ -93,6 +130,8 @@ class ConcreteFsEntry:
         terminal_dir = slots.pop() if slots else False
         prefix = "".join([ancestor_symbols[x] for x in slots])
 
+        # this could be much better. The selectors are terrible for a start.
+        # Just move the logic out of the template and into the surrounds
         template_str = """
             {%- if depth == 0 -%}
                 {{tree_symbols['root_path'](size, path)}}
@@ -186,14 +225,13 @@ class ConcreteFsEntry:
         return parent
 
     @property
-    def sibling_dirs(self) -> list:
-        # this is wrong. use parent (it works but we should use our own interface)
-        return self.path.is_dir() and any(
-            [x for x in self.path.parent.iterdir() if x.is_dir() and x != self.path]
-        )
+    def empty(self) -> bool:
+        """Are we empty"""
+        return self.get_size == 0
 
     @property
     def child_dirs(self) -> bool:
+        """Lets the caller know if this object has any children dirs"""
         return bool(len([x for x in self.children if x.path.is_dir()]))
 
     @property
@@ -205,6 +243,22 @@ class ConcreteFsEntry:
     def storable(self) -> bool:
         """If this object can be used to store files"""
         return self.path.is_dir()
+
+    @property
+    def sibling_dirs(self) -> list:
+        # this is wrong. use parent (it works but we should use our own interface)
+        return self.path.is_dir() and any(
+            [x for x in self.path.parent.iterdir() if x.is_dir() and x != self.path]
+        )
+
+    def get_size(self) -> int:
+        match self.fs_type:
+            case FsType.FILE:
+                return self.path.stat().st_size
+            case FsType.DIRECTORY:
+                return sum(
+                    f.stat().st_size for f in self.path.glob("**/*") if f.is_file()
+                )
 
     def parents(self) -> list[ConcreteFsEntry]:
         """Get all ancestors up the file tree, finishing at root"""
@@ -226,11 +280,11 @@ class ConcreteFsEntry:
             return last.path == child.path
         return False
 
-    # def last_sibling(self, child: ConcreteFsEntry) -> bool:
-    #     if len(self.children):
-    #         last = self.children[-1]
-    #         return last.path == child.path
-    #     return False
+    def last_sibling(self, child: ConcreteFsEntry) -> bool:
+        if len(self.children):
+            last = self.children[-1]
+            return last.path == child.path
+        return False
 
     def realize(self):
         """Will populate FsEntry with live file details"""
@@ -272,6 +326,56 @@ class ConcreteFsEntry:
         await self.fh.close()
         self.fh = None
 
+    ### CRC OPERATIONS
+
+    def crc_file(self, filename: Path, crc: int) -> int:
+        with open(filename, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 128), b""):
+                crc = binascii.crc32(chunk, crc)
+
+        return crc
+
+    def crc_directory(self, directory: Path, crc: int) -> int:
+        crc = binascii.crc32(directory.name.encode(), crc)
+        for path in sorted(directory.iterdir(), key=lambda p: str(p).lower()):
+            crc = binascii.crc32(path.name.encode(), crc)
+
+            if path.is_file():
+                crc = self.crc_file(path, crc)
+            elif path.is_dir():
+                crc = self.crc_directory(path, crc)
+        return crc
+
+    def get_file_hash(self, file: Path):
+        crc = self.crc_file(file, 0)
+        return {str(file.relative_to(self.local_workdir)): crc}
+
+    def get_directory_hashes(self, dir: str = "") -> dict[str, int]:
+        hashes = {}
+
+        if dir:
+            p = Path(dir)
+            if not p.is_absolute:
+                p = self.local_workdir / self.local_path
+        else:
+            p = self.local_workdir / self.local_path
+
+        if not p.exists() and p.is_dir():
+            return hashes
+
+        crc = binascii.crc32(p.name.encode())
+
+        # this is common format "just relative path"
+        hashes.update({str(p.relative_to(self.local_workdir)): crc})
+        # this bit needs to move to ConcreteFs
+        for path in sorted(p.iterdir(), key=lambda p: str(p).lower()):
+            if path.is_dir():
+                hashes.update(self.get_directory_hashes(str(path)))
+
+            elif path.is_file():
+                hashes.update(self.get_file_hash(path))
+        return hashes
+
 
 # example (needs updated for parent, fh, last_modified, depth)
 
@@ -310,7 +414,8 @@ class ConcreteFsEntry:
 # )
 
 blimp = ConcreteFsEntry.build_tree(
-    Path("/Users/davew/.vault/gravyboat/components/fluxagent/fake_root/racing")
+    # Path("/Users/davew/.vault/gravyboat/components/fluxagent/fake_root/racing")
+    Path("/Users/davew/.vault")
 )
 blimp.realize()
 

@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 from fluxvault.helpers import SyncStrategy, bytes_to_human, size_of_object, tar_object
+from fluxvault.fs import ConcreteFsEntry
 from fluxvault.log import log
 
 
@@ -16,36 +17,44 @@ class FluxTask:
 
 
 @dataclass
-class FileSystemEntry:
-    is_dir: bool
+class AbstractFsEntry:  # this is wrong selector. More about the relationship between
+    # remote and local file
+    """Wrapper around ConcreteFsEntry. Manages state between local and remote
+    objects. From Keeper point of view, the StreamWriter for the remote system
+    is the filesystem"""
+    # remove file data and move to ConcreteFs, same with is_dir
     local_path: Path
     fake_root: bool
-    is_empty: bool | None = None
     remote_prefix: Path | None = None
     local_workdir: Path | None = None
     remote_workdir: Path | None = None
     local_crc: int = 0
     remote_crc: int = 0
-    keeper_context: bool = True
-    remote_object_exists: bool = False
-    local_object_exists: bool = False
-    in_sync: bool = False
     validated_remote_crc: int = 0
-    file_data: bytes = b""
+    keeper_context: bool = True
+    local_object_exists: bool = False
+    remote_object_exists: bool = False  # Eventually share these objects
+    in_sync: bool = False
     sync_strategy: SyncStrategy = SyncStrategy.STRICT
+    concrete_fs: ConcreteFsEntry | None = None
 
-    # def is_dir(self) -> bool:
-    #     return (self.local_workdir / self.local_path).is_dir()
+    @property
+    def empty(self):
+        return self.concrete_fs.empty
+
+    @property
+    def storable(self):
+        return self.concrete_fs.storable
+
+    @property
+    def readable(self):
+        return self.concrete_fs.readable
 
     @property
     def absolute_local_path(self) -> Path:
         return self.local_workdir / self.local_path
 
-    def is_remote_prefix_absolute(self) -> bool:
-        return self.remote_prefix.is_absolute() if self.remote_prefix else False
-
-    # def local_absolute_from_remote_absolute(self, path: Path):
-
+    # just get this from ConcreteFs now
     @property
     def absolute_remote_path(self) -> Path:
         expanded_remote = (
@@ -75,8 +84,12 @@ class FileSystemEntry:
         #     else self.remote_prefix
         # )
 
-    def is_empty_dir(self) -> bool:
-        return not any((self.local_workdir / self.local_path).iterdir())
+    # just make this a property
+    def is_remote_prefix_absolute(self) -> bool:
+        return self.remote_prefix.is_absolute() if self.remote_prefix else False
+
+    # def is_empty_dir(self) -> bool:
+    #     return not any((self.local_workdir / self.local_path).iterdir())
 
     def expanded_remote_path(self) -> Path:
         return (
@@ -124,6 +137,7 @@ class FileSystemEntry:
 
         # this is common format "just relative path"
         hashes.update({str(p.relative_to(self.local_workdir)): crc})
+        # this bit needs to move to ConcreteFs
         for path in sorted(p.iterdir(), key=lambda p: str(p).lower()):
             if path.is_dir():
                 hashes.update(self.get_directory_hashes(str(path)))
@@ -206,7 +220,7 @@ class FileSystemEntry:
 
 @dataclass
 class FileSystemeGroup:
-    managed_objects: list[FileSystemEntry] = field(default_factory=list)
+    managed_objects: list[AbstractFsEntry] = field(default_factory=list)
     working_dir: Path = field(default_factory=Path)
     remote_workdir: Path = field(default_factory=Path)
     flattened: bool = False
@@ -241,31 +255,31 @@ class FileSystemeGroup:
 
     def merge_config(self, objects):
         for obj in objects:
-            if isinstance(obj, FileSystemEntry):
+            if isinstance(obj, AbstractFsEntry):
                 obj.remote_workdir = self.remote_workdir
                 self.managed_objects.append(obj)
             else:
                 log.error(
-                    f"Object of type {type(obj)} added to file manager, must be `FileSystemEntry`"
+                    f"Object of type {type(obj)} added to file manager, must be `AbstractFsEntry`"
                 )
 
     def add_objects(self, objects: list):
         for obj in objects:
             self.add_object(obj)
 
-    def add_object(self, obj: FileSystemEntry):
+    def add_object(self, obj: AbstractFsEntry):
         if not obj.local_workdir:
             obj.local_workdir = self.working_dir
         self.managed_objects.append(obj)
 
-    def get_object_by_remote_path(self, remote: Path) -> FileSystemEntry:
+    def get_object_by_remote_path(self, remote: Path) -> AbstractFsEntry:
         for fs_object in self.managed_objects:
             path = fs_object.absolute_remote_path
 
             if path == remote:
                 return fs_object
 
-    def get_all_objects(self) -> list[FileSystemEntry]:
+    def get_all_objects(self) -> list[AbstractFsEntry]:
         return self.managed_objects
 
     def update_paths(self, local: Path, remote: Path | None = None):
@@ -344,7 +358,7 @@ class FluxComponentConfig:
 
             relative_path = fs_object.relative_to(fake_root)
 
-            managed_object = FileSystemEntry(
+            managed_object = AbstractFsEntry(
                 is_dir=is_dir,
                 local_path=relative_path,
                 fake_root=True,
@@ -400,7 +414,7 @@ class FluxAppConfig:
     def ensure_removed(self, name: str):
         self.components = [c for c in self.components if c.get("name") != name]
 
-    def update_common_objects(self, files: list[FileSystemEntry]):
+    def update_common_objects(self, files: list[AbstractFsEntry]):
         self.file_manager.add_objects(files)
 
     def update_paths(self, root_app_dir: Path):

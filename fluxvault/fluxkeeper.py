@@ -2,6 +2,7 @@
 
 # So you don't have to forward reference in typing own class. See FsEntry
 from __future__ import annotations
+
 import asyncio
 import functools
 import shutil
@@ -9,67 +10,54 @@ from dataclasses import dataclass, field
 from functools import reduce
 from pathlib import Path
 from typing import Callable
-import aiofiles
-from enum import Enum
-import time
 
+import aiofiles
 
 # 3rd party
 import aiohttp
 import cryptography
+import yaml
+from cryptography.x509.oid import NameOID
+
+# from rich.pretty import pretty_repr
+# from pprint import pformat
 from fluxrpc.auth import SignatureAuthProvider
 from fluxrpc.client import RPCClient, RPCProxy
 from fluxrpc.exc import MethodNotFoundError
 from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
-from cryptography.x509.oid import NameOID
 from ownca import CertificateAuthority
 from ownca.exceptions import OwnCAInvalidCertificate
+from rich.pretty import pprint
 
 # this package
 from fluxvault.app_init import setup_filesystem_and_wallet
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.fluxapp_config import FileSystemeGroup, FileSystemEntry, FluxAppConfig
+from fluxvault.fluxapp import (
+    FluxApp,
+    FluxComponent,
+    FluxTask,
+    FsEntryStateManager,
+    FsStateManager,
+    RemoteStateDirective,
+)
 from fluxvault.fluxkeeper_gui import FluxKeeperGui
 from fluxvault.helpers import (
     FluxVaultKeyError,
     SyncStrategy,
     bytes_to_human,
     manage_transport,
-    size_of_object,
-    tar_object,
 )
 from fluxvault.log import log
 
+CONFIG_NAME = "config.yaml"
 
-@dataclass
-class SyncRequest:
-    path: str
-    data: bytes
-    is_dir: bool
-    uncompressed: bool
-
-    def serialize(self):
-        return self.__dict__
-
-
-class FsType(Enum):
-    DIRECTORY = 1
-    FILE = 2
-    UNKNOWN = 3
-
-
-@dataclass
-class FsEntry:
-    fs_type: FsType
-    path: Path
-    size: int
-    children: list[FsEntry] = field(default_factory=list)
-
-    def __str__(self):
-        decendants = [str(x) for x in self.children]
-        decendants_str = "\n\t".join(decendants)
-        return f"<FsEntry type: {self.fs_type}, size: {self.size} path: {self.path}\n\t{decendants_str}"
+# path types
+#                  absolute  | relative | relative      | absolute
+# full_fake_root = vault_dir / app_dir  / fake_root_dir / remote_dir
+# app_dir is portable
+# The only common format is absolute_remote
+# only way to convert back and forward is with managed_object
 
 
 @dataclass
@@ -86,30 +74,159 @@ class FluxKeeper:
     of that data is restricted to the application owner
     """
 
-    # GUI hidden via cli, no where near ready, should probably disable
+    # GUI hidden via cli, no where near ready
     def __init__(
         self,
-        apps_config: list[FluxAppConfig],
-        vault_dir: Path,
-        gui: bool = False,
+        vault_dir: str | None = None
+        # gui: bool = False,
     ):
-        self.apps_config = apps_config
+
         # ToDo: configurable port
         self.gui = FluxKeeperGui("127.0.0.1", 7777, self)
 
         self.loop = asyncio.get_event_loop()
         self.managed_apps: list[FluxAppManager] = []
-        self.vault_dir = vault_dir
-        self.root_dir = setup_filesystem_and_wallet(self.vault_dir)
+        self.root_dir: Path = setup_filesystem_and_wallet()
+
+        self.qualify_vault_dir(vault_dir)
+        self.apps: list[FluxApp] = []
+
+        for app_dir in self.vault_dir.iterdir():
+            if not app_dir.is_dir():
+                continue
+
+            try:
+                with open(app_dir / CONFIG_NAME, "r") as stream:
+                    try:
+                        config = yaml.safe_load(stream)
+                    except yaml.YAMLError as e:
+                        raise ValueError(
+                            f"Error parsing vault config file: {CONFIG_NAME} for app {app_dir}. Exc: {e}"
+                        )
+            except (FileNotFoundError, PermissionError) as e:
+                raise ValueError(
+                    f"Error opening config file {CONFIG_NAME} for app {app_dir}. Exc: {e}"
+                )
+            self.apps.append(
+                self.build_app(app_dir.name, self.vault_dir / app_dir.name, config)
+            )
 
         log.info(f"App Data directory: {self.root_dir}")
-        log.info(f"Vault directory: {self.vault_dir}")
+        log.info(f"Global Vault directory: {self.vault_dir}")
+        log.info(f"Apps loaded: {[x.name for x in self.apps]}")
 
         self.init_certificate_authority()
         self.configure_apps()
 
-        if gui:
-            self.start_gui()
+        # if gui:
+        #     self.start_gui()
+
+    @classmethod
+    def setup(cls) -> Path:
+        return setup_filesystem_and_wallet()
+
+    def qualify_vault_dir(self, dir: str):
+        if not dir:
+            self.vault_dir = Path().home() / ".vault"
+            return
+
+        vault_dir = Path(dir)
+
+        if not vault_dir.is_dir() and not vault_dir.is_absolute():
+            raise ValueError(
+                f"Invalid vault dir: {vault_dir}, must exist and be absolute"
+            )
+
+    def state_directives_builder(self, remote_workdir: Path, fs_entries: list) -> list:
+        state_directives = []
+        for fs_entry in fs_entries:
+            parent = None
+            name = fs_entry.get("name", None)
+
+            if content_source := fs_entry.get("content_source", None):
+                content_source = Path(content_source)
+                name = content_source.name
+                parent = content_source.parent
+
+            absolute_dir = (
+                Path(fs_entry.get("remote_dir"))
+                if fs_entry.get("remote_dir")
+                else remote_workdir
+            )
+
+            sync_strategy = SyncStrategy[
+                fs_entry.get("sync_strategy", SyncStrategy.ENSURE_CREATED.name)
+            ]
+
+            state_directive = RemoteStateDirective(
+                name, parent, absolute_dir, sync_strategy
+            )
+
+            state_directives.append(state_directive)
+        return state_directives
+
+    # do this as a lambda?
+    # flux_tasks = []
+    # map(lambda x: flux_tasks.append(FluxTask(x.get("name"), x.get("params"))), tasks)
+    def tasks_builder(self, tasks: list) -> list:
+        flux_tasks = []
+        for task in tasks:
+            flux_task = FluxTask(task.get("name"), task.get("params"))
+            flux_tasks.append(flux_task)
+        return flux_tasks
+
+    def build_app(self, name: str, app_dir: str, config: dict) -> FluxApp:
+        # state_directives = params.pop("state_directives", [])
+
+        log.info(f"User config:\n")
+        pprint(config)
+        print()
+
+        app_config = config.get("app_config")
+        groups_config = app_config.pop("groups", None)
+
+        app = FluxApp(name, root_dir=app_dir, **app_config)
+
+        components_config = config.get("components", [])
+
+        for component_name, directives in components_config.items():
+            remote_workdir = directives.pop("remote_workdir")
+
+            if not Path(remote_workdir).is_absolute():
+                raise ValueError(f"Remote workdir {remote_workdir} is not absolute")
+
+            component = FluxComponent(
+                component_name,
+                local_workdir=app_dir / "components" / component_name,
+                remote_workdir=Path(remote_workdir),
+            )
+
+            # add the members to the component, then fix up build_catalogue
+
+            # ummmmm lol
+            if groups := directives.pop("member_of", None):
+                component.add_groups(groups)
+                for group in groups:
+                    if g := groups_config.get(group, None):
+                        if d := g.get("state_directives", None):
+                            if directives.get("state_directives", None):
+                                directives["state_directives"].extend(d)
+                            else:
+                                directives["state_directives"] = d
+
+            for directive, data in directives.items():
+                match directive:
+                    case "state_directives":
+                        component.state_manager.add_directives(
+                            self.state_directives_builder(Path(remote_workdir), data)
+                        )
+                    case "tasks":
+                        component.add_tasks(self.tasks_builder(data))
+            app.add_component(component)
+        log.info("Built app config:\n")
+        pprint(app)
+        print()
+        return app
 
     def init_certificate_authority(self):
         common_name = "keeper.fluxvault.com"
@@ -128,37 +245,50 @@ class FluxKeeper:
         self.ca_cert = self.ca.cert_bytes
 
     def configure_apps(self):
-        for app_config in self.apps_config:
-            app_config.update_paths(self.vault_dir / app_config.name)
-            app_config.build_catalogue()
-            app_config.validate_local_objects()
-            flux_app = FluxAppManager(self, app_config)
+        for app in self.apps:
+            app.build_catalogue()  # from fake_root
+            app.validate_local_objects()  # all objects
+            flux_app = FluxAppManager(self, app)
             self.managed_apps.append(flux_app)
 
     def start_gui(self):
         self.loop.run_until_complete(self.gui.start())
 
-    async def manage_apps(self):
-        for app in self.managed_apps:
+    def cleanup(self):
+        log.info("Fluxkeeper cleanup called...")
+        for app in self.apps:
+            app.remove_catalogue()
+
+    async def manage_apps(self, run_once: bool, polling_interval: int):
+        # add a try finally here to clean up symlinks in fake_root
+        # this is broken. They need tobe run as tasks.
+        tasks = []
+
+        async def manage(app_manager: FluxAppManager):
             while True:
-                await app.run_agent_tasks()
-                if app.app_config.run_once:
+                await app_manager.run_agent_tasks()
+                if run_once:
                     break
                 log.info(
-                    f"sleeping {app.app_config.polling_interval} seconds for app {app.app_config.name}..."
+                    f"sleeping {polling_interval} seconds for app {app_manager.app.name}..."
                 )
-                await asyncio.sleep(app.app_config.polling_interval)
+                await asyncio.sleep(polling_interval)
+
+        for app_manager in self.managed_apps:
+            tasks.append(asyncio.create_task(manage(app_manager)))
+
+        await asyncio.gather(*tasks)
 
 
 class FluxAppManager:
     def __init__(
         self,
         keeper: FluxKeeper,
-        config: FluxAppConfig,
+        app: FluxApp,
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
     ):
         self.keeper = keeper
-        self.app_config = config
+        self.app = app
         self.agents = []
         self.extensions = extensions
         self.network_state = {}
@@ -173,7 +303,7 @@ class FluxAppManager:
         return len(self.agents)
 
     @staticmethod
-    async def get_agent_ips(app_name: str) -> list:
+    async def get_fluxnode_ips(app_name: str) -> list:
         url = f"https://api.runonflux.io/apps/location/{app_name}"
         timeout = aiohttp.ClientTimeout(connect=10)
         retries = 3
@@ -237,30 +367,30 @@ class FluxAppManager:
         return list(filter(lambda x: not x.is_proxied, self.agents))
 
     def build_agents(self):
-        agent_ips = (
-            self.app_config.agent_ips
-            if self.app_config.agent_ips
-            else self.get_agent_ips(self.app_config.name)
+        fluxnode_ips = (
+            self.app.fluxnode_ips
+            if self.app.fluxnode_ips
+            else self.get_fluxnode_ips(self.app.name)
         )
 
-        if not self.app_config.signing_key and self.app_config.sign_connections:
+        if not self.app.signing_key and self.app.sign_connections:
             raise ValueError("Signing key must be provided if signing connections")
 
         auth_provider = None
-        if self.app_config.sign_connections and self.app_config.signing_key:
-            auth_provider = SignatureAuthProvider(key=self.app_config.signing_key)
+        if self.app.sign_connections and self.app.signing_key:
+            auth_provider = SignatureAuthProvider(key=self.app.signing_key)
 
-        for ip in agent_ips:
+        for ip in fluxnode_ips:
             transport = EncryptedSocketClientTransport(
                 ip,
-                self.app_config.comms_port,
+                self.app.comms_port,
                 auth_provider=auth_provider,
                 proxy_target="",
                 on_pty_data_callback=self.keeper.gui.pty_output,
                 on_pty_closed_callback=self.keeper.gui.pty_closed,
             )
             flux_agent = RPCClient(
-                JSONRPCProtocol(), transport, (self.app_config.name, ip, "fluxagent")
+                JSONRPCProtocol(), transport, (self.app.name, ip, "fluxagent")
             )
             self.add(flux_agent)
 
@@ -300,43 +430,32 @@ class FluxAppManager:
 
     @staticmethod
     def get_extra_objects(
-        managed_object: FileSystemEntry,
+        managed_object: FsEntryStateManager,
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
     ) -> tuple[list[Path], int]:
         count = 0
         extras = []
 
+        fake_root = managed_object.root()
         for remote_name in remote_hashes:
             remote_name = Path(remote_name)
 
-            relative_path = str(remote_name.relative_to(managed_object.remote_prefix))
-
-            # this won't happen anymore. Remote prefix will always be absolute
-            # for a directory (only get this via chroot config)
-            # if managed_object.is_remote_prefix_absolute():
-            #     relative_path = str(
-            #         remote_name.relative_to(managed_object.remote_prefix)
-            #     )
-            # else:
-            #     relative_path = str(
-            #         remote_name.relative_to(managed_object.remote_workdir)
-            #     )
-
-            local_name = local_hashes.get(relative_path, None)
+            target = str(fake_root / remote_name.relative_to("/"))
+            local_name = local_hashes.get(target, None)
 
             if local_name is None:
                 count += 1
                 if not extras:
                     extras.append(remote_name)
 
-                extras = FileSystemeGroup.filter_hierarchy(remote_name, extras)
+                extras = FsStateManager.filter_hierarchy(remote_name, extras)
 
         return (extras, count)
 
     @staticmethod
     def get_missing_or_modified_objects(
-        managed_object: FileSystemEntry,
+        managed_object: FsEntryStateManager,
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
     ) -> tuple[list[Path], int, int]:
@@ -347,11 +466,12 @@ class FluxAppManager:
         missing = 0
         modified = 0
         candidates: list[Path] = []
+        fake_root = managed_object.root()
 
         for local_path, local_crc in local_hashes.items():
-            remote_absolute = managed_object.absolute_remote_dir / local_path
-            # these local hashes have been formatted in "common" format
             local_path = Path(local_path)
+
+            remote_absolute = "/" / local_path.relative_to(fake_root)
 
             # this should always be found, we asked for the hash.
             remote_crc = remote_hashes.get(str(remote_absolute), None)
@@ -368,7 +488,7 @@ class FluxAppManager:
 
     def resolve_object_deltas(
         self,
-        managed_object: FileSystemEntry,
+        managed_object: FsEntryStateManager,
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
     ) -> tuple[list[Path], list[Path]]:
@@ -385,122 +505,116 @@ class FluxAppManager:
         )
         return (candidates, extra_objects)
 
-    # async def stream_file(self, local_path, remote_path, agent_proxy: RPCProxy):
-    #     eof = False
-    #     start = time.time()
-    #     async with aiofiles.open(local_path, "rb") as f:
-    #         while True:
-    #             if eof:
-    #                 break
-
-    #             # 50Mb
-    #             MAX_READ = 1048576 * 50
-    #             # data = await f.read(MAX_READ)
-    #             # print(f"acutal read data:{bytes_to_human(len(data))}")
-
-    #             # if not data or len(data) < MAX_READ:
-    #             #     eof = True
-    #             # log.debug(f"writing {bytes_to_human(len(data))} for file {remote_path}")
-    #             agent_proxy.notify()
-    #             eof = await agent_proxy.write_object(
-    #                 str(remote_path), False, await f.read(MAX_READ), MAX_READ
-    #             )
-    #     end = time.time()
-    #     log.info(f"File transfer took: {end - start} seconds")
-
-    async def write_objects(
+    async def sync_remote_object(
         self,
         agent_proxy: RPCProxy,
-        managed_object: FileSystemEntry,
-        objects_to_add: list[Path],
+        managed_object: FsEntryStateManager,
+        object_fragments: list[Path] = [],
     ) -> dict:
         MAX_INBAND_FILESIZE = 1048576 * 50
         inband = False
         to_stream = []
 
-        # the objects to add - we don't know if they're dirs or files
+        # this whole thing needs a refactor, gets called for both files and dirs
+        # whole fragment thing is weird
+        if object_fragments:
+            remote_dir = managed_object.absolute_remote_path
+            size = managed_object.concrete_fs.get_partial_size(object_fragments)
+        else:
+            remote_dir = managed_object.absolute_remote_dir
+            object_fragments = [managed_object.concrete_fs.path]
+            size = managed_object.concrete_fs.size
 
-        size = sum(
-            (managed_object.local_workdir / f).stat().st_size
-            for f in objects_to_add
-            if (managed_object.local_workdir / f).is_file()
+        log.info(
+            f"Sending {bytes_to_human(size)} across {len(object_fragments)} object(s)"
         )
-        log.info(f"Sending {bytes_to_human(size)} across {len(objects_to_add)} files")
 
         if size < MAX_INBAND_FILESIZE:
             inband = True
 
-        for fs_entry in objects_to_add:
-            abs_local_path = managed_object.local_workdir / fs_entry
+        for fs_entry in object_fragments:
+            # this is dumb, but I'm tired. Ideally shouldn't be creating parent dirs
+            # for files on remote end - they should get created explictily
 
-            abs_remote_path = str(managed_object.absolute_remote_dir / fs_entry)
+            abs_remote_path = str(remote_dir / fs_entry.name)
 
-            if abs_local_path.is_dir():
+            if fs_entry.is_dir():
                 # Only need to do for empty dirs but currently doing on all dirs (wasteful as they will get created anyways)
                 await agent_proxy.write_object(abs_remote_path, True, b"")
-            elif abs_local_path.is_file():
+            elif fs_entry.is_file():
                 # read whole file in one go as it's less than 50Mb
                 if inband:
-                    async with aiofiles.open(abs_local_path, "rb") as f:
+                    async with aiofiles.open(fs_entry, "rb") as f:
                         await agent_proxy.write_object(
                             abs_remote_path, False, await f.read()
                         )
                     continue
                 else:
-                    to_stream.append((abs_local_path, abs_remote_path))
+                    to_stream.append((fs_entry, abs_remote_path))
         if to_stream:
             transport = agent_proxy.get_transport()
             await transport.stream_files(to_stream)
 
     async def resolve_file_state(
-        self, managed_object: FileSystemEntry, agent_proxy: RPCProxy
+        self, managed_object: FsEntryStateManager, agent_proxy: RPCProxy
     ):
-        abs_local_path = managed_object.absolute_local_path
-
-        size = size_of_object(abs_local_path)
         log.info(
-            f"File {managed_object.local_path} with size {bytes_to_human(size)} is about to be transferred"
+            f"File {managed_object.name} with size {bytes_to_human(managed_object.concrete_fs.size)} is about to be transferred"
         )
         # this seems a bit strange but writing directory uses the same interface
         # and they don't know who the file names are, the just have the associated
         # managed_object
-        await self.write_objects(
-            agent_proxy, managed_object, [managed_object.local_path]
-        )
+
+        # what are we passing in here?
+        await self.sync_remote_object(agent_proxy, managed_object)
 
         managed_object.in_sync = True
         managed_object.remote_object_exists = True
 
     async def resolve_directory_state(
-        self, managed_object: FileSystemEntry, agent_proxy: RPCProxy
+        self,
+        component: FluxComponent,
+        managed_object: FsEntryStateManager,
+        agent_proxy: RPCProxy,
     ) -> dict:
         remote_path = str(managed_object.absolute_remote_path)
+
+        # if it doesn't exist - no point getting child hashes
+        if managed_object.remote_crc == 0:
+            await self.sync_remote_object(agent_proxy, managed_object)
+            return
 
         # this is different from the global get_all_object_hashes - this adds
         # all the hashes together, get_directory_hashes keeps them seperate
         remote_hashes = await agent_proxy.get_directory_hashes(remote_path)
-        local_hashes = managed_object.get_directory_hashes()
+        # these are absolute
+        local_hashes = managed_object.concrete_fs.get_directory_hashes()
         # these are in remote absolute form
-        objects_to_add, objects_to_remove = self.resolve_object_deltas(
+        object_fragments, objects_to_remove = self.resolve_object_deltas(
             managed_object, local_hashes, remote_hashes
         )
 
-        if managed_object.sync_strategy == SyncStrategy.STRICT and objects_to_remove:
+        if (
+            managed_object.remit.sync_strategy == SyncStrategy.STRICT
+            and objects_to_remove
+        ):
             # we need to remove extra objects
             # ToDo: sort serialization so you can pass in paths etc
             to_delete = [str(x) for x in objects_to_remove]
             await agent_proxy.remove_objects(to_delete)
             log.info(
-                f"Sync strategy set to {SyncStrategy.STRICT.name}, deleting extra objects: {to_delete}"
+                f"Sync strategy set to {SyncStrategy.STRICT.name} for {managed_object.name}, deleting extra objects: {to_delete}"
             )
         elif SyncStrategy.ALLOW_ADDS:
             managed_object.validated_remote_crc = managed_object.remote_crc
 
         log.info(
-            f"Deltas resolved... {len(objects_to_add)} object(s) need to be resynced: {objects_to_add}"
+            f"Deltas resolved... {len(object_fragments)} object(s) need to be resynced: {object_fragments}"
         )
 
-        await self.write_objects(agent_proxy, managed_object, objects_to_add)
+        if object_fragments:
+            await self.sync_remote_object(agent_proxy, managed_object, object_fragments)
+            component.state_manager.set_syncronized(object_fragments)
 
         managed_object.in_sync = True
         managed_object.remote_object_exists = True
@@ -509,28 +623,21 @@ class FluxAppManager:
     async def sync_objects(self, agent: RPCClient):
         log.debug(f"Contacting Agent {agent.id} to check if files required")
         # ToDo: fix formatting nightmare between local / common / remote
-        component_config = self.app_config.get_component(agent.id[2])
+        component = self.app.get_component(agent.id[2])
 
-        # BUILD DIRECTORIES FIRST!!!!
-
-        if not component_config:
+        if not component:
             # each component must be specified
             log.warn(
                 f"No config found for component {agent.id[2]}, this component will only get globally specified files"
             )
             return
 
-        remote_paths = component_config.file_manager.absolute_remote_paths()
-        remote_dirs = component_config.file_manager.absolute_remote_dirs()
+        remote_paths = component.state_manager.absolute_remote_paths()
 
         agent_proxy = agent.get_proxy()
 
-        # if not component_config.directories_built:
-        #     dirs = [{"path": x, "is_dir": False, "data": b""} for x in remote_dirs]
-        #     await agent_proxy.write_objects(dirs)
-        #     component_config.directories_built = True
-
         remote_fs_objects = await agent_proxy.get_all_object_hashes(remote_paths)
+
         log.debug(f"Agent {agent.id} remote file CRCs: {remote_fs_objects}")
 
         if not remote_fs_objects:
@@ -539,7 +646,7 @@ class FluxAppManager:
 
         for remote_fs_object in remote_fs_objects:
             remote_path = Path(remote_fs_object["name"])
-            managed_object = component_config.file_manager.get_object_by_remote_path(
+            managed_object = component.state_manager.get_object_by_remote_path(
                 remote_path
             )
 
@@ -557,32 +664,33 @@ class FluxAppManager:
                 continue
 
             if (
-                managed_object.sync_strategy == SyncStrategy.ALLOW_ADDS
-                and managed_object.is_dir
+                managed_object.remit.sync_strategy == SyncStrategy.ALLOW_ADDS
+                and managed_object.concrete_fs.storable
                 and not managed_object.in_sync
                 and managed_object.validated_remote_crc == managed_object.remote_crc
             ):
                 continue
 
             if (
-                managed_object.sync_strategy == SyncStrategy.ENSURE_CREATED
-                and managed_object.is_dir
+                managed_object.remit.sync_strategy == SyncStrategy.ENSURE_CREATED
+                # and managed_object.concrete_fs.storable
                 and managed_object.remote_object_exists
             ):
                 continue
 
             if (
-                managed_object.is_dir
-                and managed_object.is_empty_dir()
+                managed_object.concrete_fs.storable
+                and managed_object.concrete_fs.empty
                 and managed_object.local_crc == managed_object.remote_crc
             ):
                 continue
 
-            if not managed_object.in_sync and managed_object.is_dir:
-                await self.resolve_directory_state(managed_object, agent_proxy)
+            if not managed_object.in_sync and managed_object.concrete_fs.storable:
+                await self.resolve_directory_state(
+                    component, managed_object, agent_proxy
+                )
 
-            if not managed_object.in_sync and not managed_object.is_dir:
-                print("RESOLVE FILE STATE", managed_object)
+            if not managed_object.in_sync and not managed_object.concrete_fs.storable:
                 await self.resolve_file_state(managed_object, agent_proxy)
 
     def poll_all_agents(self):
@@ -651,10 +759,10 @@ class FluxAppManager:
     ) -> RPCClient:
         transport = EncryptedSocketClientTransport(
             address,
-            self.app_config.comms_port,
+            self.app.comms_port,
             auth_provider=auth_provider,
             proxy_target=proxy_target,
-            proxy_port=self.app_config.comms_port,
+            proxy_port=self.app.comms_port,
             proxy_ssl=False,
             cert=self.keeper.cert,
             key=self.keeper.key,
@@ -663,7 +771,7 @@ class FluxAppManager:
             on_pty_closed_callback=self.keeper.gui.pty_closed,
         )
         flux_agent = RPCClient(
-            JSONRPCProtocol(), transport, (self.app_config.name, address, proxy_target)
+            JSONRPCProtocol(), transport, (self.app.name, address, proxy_target)
         )
 
         return flux_agent
@@ -704,9 +812,7 @@ class FluxAppManager:
                     await self.keeper.gui.set_toast(repr(e))
 
         if self.keeper.gui:
-            await self.keeper.gui.app_state_update(
-                self.app_config.name, self.network_state
-            )
+            await self.keeper.gui.app_state_update(self.app.name, self.network_state)
 
     def __getattr__(self, name: str) -> Callable:
         try:

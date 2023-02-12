@@ -48,16 +48,17 @@ def generate_wallet():
     print(f"receive address: {key.address}")
 
 
-def first_run(root, vault_dir):
+def first_run(root):
     root.mkdir(parents=True)
     os.environ["FW_INIT_DATA_DIR"] = str(root / ".wallet")
 
     db_dir = root / "db"
     apps_dir = root / "apps"
-    # vault_dir = Path().home() / ".vault"
+    generic_vault_dir = Path().home() / ".vault"
 
     apps_dir.mkdir()
     db_dir.mkdir()
+    generic_vault_dir.mkdir()
 
     # con = sqlite3.connect(db_dir / "fluxvault.db")
     # cursor = con.cursor()
@@ -67,9 +68,9 @@ def first_run(root, vault_dir):
     generate_wallet()
 
     print(
-        "Opening vault directory, this is where you store your filesystems. See notes for how to populate / change it..."
+        "Opening generic vault directory, if you don't specify a vault dir when you create an app, this is where it will end up by default"
     )
-    show_in_file_manager(str(vault_dir))
+    show_in_file_manager(str(generic_vault_dir))
 
 
 def init_wallet():
@@ -79,12 +80,12 @@ def init_wallet():
     w = wallet_create_or_open("Primary", network="flux")
 
 
-def setup_filesystem_and_wallet(vault_dir) -> Path:
+def setup_filesystem_and_wallet() -> Path:
     root = app_dir()
     if root.exists():
         init_wallet()
     else:
-        first_run(root, vault_dir)
+        first_run(root)
     return root
 
 

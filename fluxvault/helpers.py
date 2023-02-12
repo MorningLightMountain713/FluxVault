@@ -3,6 +3,7 @@ import io
 import re
 import socket
 import tarfile
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -133,6 +134,40 @@ def size_of_object(path: Path) -> int:
     log.info(f"Syncing {obj_type} {path} of size { bytes_to_human(size)}")
 
     return size
+
+
+@dataclass
+class RemoteStateDirective:
+    """"""
+
+    name: str | None = None
+    content_source: Path | None = None
+    remote_dir: Path | None = None
+    sync_strategy: SyncStrategy = SyncStrategy.ENSURE_CREATED
+
+    # @property
+    # def absolute_dir(self):
+    #     if not any([self.workdir, self.prefix]):
+    #         ...
+    #     # maybe do some sanity stuff here, make sure at least one of them are absolute
+    #     match self.prefix:
+    #         case x if x and x.is_absolute():
+    #             return x
+    #         case x if x:
+    #             return self.workdir / self.prefix
+    #         case x if not x:
+    #             return self.workdir
+
+    @property
+    def local_absolute_path(self):
+        return None if not self.content_source else self.content_source / self.name
+
+    def serialize(self):
+        return {
+            "content_source": str(self.content_source),
+            "prefix": str(self.remote_dir),
+            "sync_strategy": self.sync_strategy.name,
+        }
 
 
 class FluxVaultKeyError(Exception):

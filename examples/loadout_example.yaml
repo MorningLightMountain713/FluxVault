@@ -45,41 +45,42 @@
 
 # If you want your component to receive global files only, it must still have an entry in the components secion
 # this can be as simple as adding a mapping like  `mycomponent: {}`
-defaults: &defaults
-  - name: crankyseagull
-    remote_prefix: /tmp/jumbo
+
 apps:
   gravyboat:
-    agent_ips: [192.168.4.27]
-    polling_interval: 60
-    managed_objects:
-      - name: chud.txt
-        # this remote path is absolute, so the final path on the agent will be /tmp/chud.txt
-        remote_prefix: /tmp/
-      - name: chumgo.txt
-      # notice this remote_prefix is relative, this will be relative to the agents working dir
-      # absolute path will be /{working_dir}/chunk/chumgo.txt (by default, the working dir is /tmp)
-        remote_prefix: chunk/
+    # vault_dir: /Users/davew/.vault
+    remote_workdir: /tmp/gravyboat
+    fluxnode_ips: [172.26.26.126]
+    comms_port: 8888
+    groups:
+      all:
+        state_directives:
+          - content_source: chud.txt
+            # this remote path is absolute, so the final path on the agent will be /tmp/chudder/chud.txt
+            remote_dir: /tmp/chudder
+      seagulls:
+        state_directives:
+          - content_source: crankyseagull
+            remote_dir: /tmp/jumbo
+    # defaults: &defaults
+    #   - content_source: crankyseagull
+    #     remote_dir: /tmp/jumbo
+
     components:
-      # 127.0.0.1: # this would normally be a friendly component name, but on my test machine, just using ip
-      #   # these are specific to a component
-      #   working_dir: "/tmp"
-      #   managed_objects:
-      #     - name: blah.txt
-      #       remote_prefix: /tmp/
-      #     - name: quotes.txt
-      #     - name: dogs
-      #     - name: racing
-      #       sync_strategy: ENSURE_CREATED
-      fluxagent: # this is a component name
-        remote_working_dir: "/tmp/rangi"
-        managed_objects:
+      127.0.0.1: # this would normally be a friendly component name, but on my test machine, just using ip
+        # these are specific to a component
+        remote_workdir: /tmp/127
+        state_directives:
           - name: blah.txt
-          # - <<: *defaults # Mapping merge operator, this adds the above defaults here
-          # - name: racing
-          #   remote_prefix: /tmp/sally/
-          #   sync_strategy: ALLOW_ADDS
-          # - name: 
+            remote_prefix: blah
+      fluxagent: # this is a component name
+        member_of: [seagulls]
+        state_directives:
+          - content_source: blah.txt
+            sync_strategy: STRICT
+          - name: weiner
+            remote_dir: /tmp/gravyboat
+            sync_strategy: STRICT
         # managed_tasks: NOT IMPLEMENTED (YET)
 
 
@@ -106,3 +107,11 @@ apps:
 # fluxvault keeper --app-name gravyboat --agent-ips 192.168.4.27 \
 # --managed-objects chud.txt:/tmp/,chumgo.txt:chunk/,blah.txt:/tmp/@127.0.0.1,quotes.txt@127.0.0.1,dogs@127.0.0.1,racing:C@127.0.0.1,crankyseagull:/tmp/jumbo@fluxagent,racing:/tmp/sally/:A@fluxagent,VSCode-darwin-universal.zip@fluxagent,ubu/ubuntu-22.04.1-live-server-amd64.iso@fluxagent \
  # --polling-interval 20
+
+ # state directives
+ # To set sync_strategy on remote object (object is already in fake_root):
+ # - name: file or dir name
+ #   remote_dir: parent directory of file or dir
+ #   sync_strategy: your sync strat
+
+ # 

@@ -4,23 +4,26 @@ import logging
 from pathlib import Path
 
 import keyring
+import pandas
 import typer
 import yaml
+from tabulate import tabulate
 
 from fluxvault import FluxAgent, FluxKeeper
-from fluxvault.fluxapp_config import (
-    FileSystemEntry,
-    FluxAppConfig,
-    FluxComponentConfig,
-    FluxTask,
-)
+from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
 from fluxvault.helpers import SyncStrategy
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 
 PREFIX = "FLUXVAULT"
 
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
-log = logging.getLogger("fluxvault")
+keeper = typer.Typer(rich_markup_mode="rich", add_completion=False)
+# agent =  typer.Typer(rich_markup_mode="rich", add_completion=False)
+
+app.add_typer(keeper, name="keeper")
+# app.add_typer(agent)
+
+from fluxvault.log import log
 
 
 class colours:
@@ -108,22 +111,16 @@ def get_signing_key(signing_address) -> str:
 
 def build_app_from_cli(
     app_name,
-    managed_objects,
-    sign_connections,
+    state_directives,
     signing_address,
     agent_ips,
     run_once,
     polling_interval,
     comms_port,
-) -> FluxAppConfig:
-    if sign_connections:
-        signing_address = get_signing_key()
-        if not signing_address:
-            raise ValueError(
-                "signing_address must be provided if signing connections (keyring)"
-            )
+    remote_workdirs,
+) -> FluxApp:
 
-    app = FluxAppConfig(
+    app = FluxApp(
         app_name,
         sign_connections=sign_connections,
         signing_key=signing_address,
@@ -133,8 +130,14 @@ def build_app_from_cli(
         comms_port=comms_port,
     )
 
+    # THIS IS BROKEN RIGHT NOW
+
+    # /tmp/blah
+    # component1:/tmp/blah,component2:/tmp/crag,default:/tmp
+    # remote_workdirs = remote_workdirs.split(",")
+
     common_objects = []
-    for obj_str in managed_objects:
+    for obj_str in state_directives:
         parts = obj_str.split("@")
 
         component_name = ""
@@ -174,100 +177,176 @@ def build_app_from_cli(
             log.error(f"Local file absolute path not allowed for: {local}... skipping")
             continue
 
-        managed_object = FileSystemEntry(
-            is_dir=False,
-            local_path=local,
-            fake_root=False,
-            remote_prefix=remote,
-            sync_strategy=sync_strat,
-        )
+        # state_directive = RemoteStateDirective(
+        #      local_path=local,
+        #      sync_strategy=sync_strat,
+        #      workdir
+        #      prefix
+        # )
+    #     managed_object = AbstractFsEntry(
+    #         local_path=local,
+    #         fake_root=False,
+    #         remote_prefix=remote,
+    #         sync_strategy=sync_strat,
+    #     )
 
-        if not component_name:
-            common_objects.append(managed_object)
+    #     if not component_name:
+    #         common_objects.append(managed_object)
+    #         continue
+
+    #     component = app.ensure_included(component_name)
+    #     component.state_manager.add_object(managed_object)
+
+    # app.update_common_objects(common_objects)
+
+    # return app
+
+
+@keeper.command()
+def list_apps(
+    vault_dir: str = typer.Option(
+        None,
+        "--vault-dir",
+        "-d",
+        envvar=f"{PREFIX}_VAULT_DIR",
+        show_envvar=False,
+    )
+):
+
+    if not vault_dir:
+        vault_dir = Path().home() / ".vault"
+
+    dfs = []
+    for app_dir in vault_dir.iterdir():
+        if not app_dir.is_dir():
             continue
 
-        component = app.ensure_included(component_name)
-        component.file_manager.add_object(managed_object)
+        with open(app_dir / "config.yaml", "r") as stream:
+            # pop elements so we don't write jumk
+            config = yaml.safe_load(stream)
+            for app_name, directives in config.items():
+                components = directives.pop("components")
+                df = pandas.json_normalize(components)
+                print(df)
 
-    app.update_common_objects(common_objects)
+        dfs.append(df)
 
-    return app
-
-
-def managed_objects_builder(files: list) -> list:
-    managed_objects = []
-    for file in files:
-        local = Path(file.get("name"))
-        remote = Path(file.get("remote_prefix")) if file.get("remote_prefix") else None
-        sync_strategy = SyncStrategy[
-            file.get("sync_strategy", SyncStrategy.STRICT.name)
-        ]
-
-        managed_object = FileSystemEntry(
-            is_dir=False,
-            local_path=local,
-            fake_root=False,
-            remote_prefix=remote,
-            sync_strategy=sync_strategy,
-        )
-        managed_objects.append(managed_object)
-    return managed_objects
+    # table = tabulate(dfs, headers="keys", tablefmt="psql", showindex=False)
+    # typer.echo(table)
 
 
-# do this as a lambda?
-# flux_tasks = []
-# map(lambda x: flux_tasks.append(FluxTask(x.get("name"), x.get("params"))), tasks)
-def tasks_builder(tasks: list) -> list:
-    flux_tasks = []
-    for task in tasks:
-        flux_task = FluxTask(task.get("name"), task.get("params"))
-        flux_tasks.append(flux_task)
-    return flux_tasks
+@keeper.command()
+def add_apps_via_loadout_file(
+    loadout_path: str = typer.Argument(
+        default=None,
+        envvar=f"{PREFIX}_LOADOUT_PATH",
+        show_envvar=False,
+    )
+):
+    try:
+        with open(loadout_path, "r") as stream:
+            try:
+                config: dict = yaml.safe_load(stream)
+            except yaml.YAMLError as e:
+                raise ValueError(
+                    f"Error parsing vault config file: {loadout_path}. Exc: {e}"
+                )
+    except (FileNotFoundError, PermissionError) as e:
+        raise ValueError(f"Error opening config file {loadout_path}. Exc: {e}")
+
+    global_defaults = {
+        "vault_dir": str(Path().home() / ".vault"),
+        "remote_workdir": "/tmp",
+        "sign_connections": False,
+    }
+
+    apps: dict = config.pop("apps")
+    # merge all config in here up front.
+    # global -> app level -> component level
+    for app_name, directives in apps.items():
+        app_directives: dict = global_defaults | directives
+
+        # this is a special directive to get the defaults into the component yaml
+        # if the punter desires
+
+        if groups := app_directives.get("groups"):
+            # groups: dict = app_directives.pop("groups", None)
+            for group_name, group in groups.items():
+                if directives := group.get("state_directives", None):
+                    for d in directives:
+                        if d.get("content_source"):
+                            d[
+                                "content_source"
+                            ] = f"groups/{group_name}/{d['content_source']}"
+
+        # only used at app level
+        vault_dir = app_directives.pop("vault_dir")
+
+        app_dir = Path(vault_dir) / Path(app_name)
+        groups_dir = app_dir / "groups"
+        components_dir = app_dir / "components"
+
+        app_dir.mkdir(parents=True, exist_ok=True)
+        groups_dir.mkdir(parents=True, exist_ok=True)
+        components_dir.mkdir(parents=True, exist_ok=True)
+
+        # app_wide_state_directives = app_directives.pop("state_directives", [])
+        # for d in app_wide_state_directives:
+        #     d["content_source"] = f"staging/{d['content_source']}"
+
+        components: dict = app_directives.pop("components")
+        for component_name, component_directives in components.items():
+            if not component_directives.get("remote_workdir"):
+                component_directives["remote_workdir"] = app_directives.get(
+                    "remote_workdir"
+                )
+
+            if groups := component_directives.get("member_of"):
+                groups.append("all")
+            else:
+                component_directives["member_of"] = ["all"]
+
+            # if app_wide_state_directives:
+            #     if "state_directives" in component_directives:
+            #         for d in components[component_name]["state_directives"]:
+            #             if d.get("content_source"):
+            #                 d[
+            #                     "content_source"
+            #                 ] = f"components/{component_name}/staging/{d['content_source']}"
+
+            #         components[component_name]["state_directives"].extend(
+            #             app_wide_state_directives
+            #         )
+            #     else:
+            #         components[component_name][
+            #             "state_directives"
+            #         ] = app_wide_state_directives
+
+        app_directives.pop("remote_workdir")
+        log.info(f"New config dir: {app_dir / 'config.yaml'}")
+        with open(app_dir / "config.yaml", "w") as stream:
+            # allowed_config_keys = [
+            #     "comms_port",
+            #     "agent_ips",
+            #     "state_directives",
+            #     "components",
+            # ]
+            # config = {k: directives[k] for k in allowed_config_keys}
+            stream.write(
+                yaml.dump({"app_config": app_directives, "components": components})
+            )
+
+        # POP COMPONENT CONFIG AND BUILD DIRS
+
+    # this ignores any other command line directive
+    # if loadout_path:
+    #     configs = build_apps_from_loadout_file(loadout_path)
+    #     apps.extend(configs)
+    # build directories.
 
 
-def build_apps_from_loadout_file(path: str) -> list:
-
-    loadout_path = Path(path)
-    apps = []
-
-    if not loadout_path.exists():
-        raise ValueError(f"Loadout path {loadout_path} doesn't exist")
-
-    with open(str(loadout_path), "r") as stream:
-        try:
-            loadout = yaml.safe_load(stream)
-        except yaml.YAMLError as exc:
-            raise ValueError(f"loadout {loadout_path} is not parseable.\n\n{exc}")
-
-    for app_name, params in loadout.get("apps").items():
-        components = params.pop("components", [])
-        # agent_ips = params.get("agent_ips")
-        # polling_interval = params.get("polling_interval")
-        common_objects = params.pop("managed_objects", [])
-        app = FluxAppConfig(app_name, **params)
-        app.file_manager.add_objects(managed_objects_builder(common_objects))
-
-        for component_name, directives in components.items():
-            component = FluxComponentConfig(component_name)
-            for directive, items in directives.items():
-                match directive:
-                    case "remote_working_dir":
-                        if not Path(items).is_absolute():
-                            raise ValueError(f"Remote workdir {items} is not absolute")
-                        component.remote_working_dir = items
-                    case "managed_objects":
-                        component.file_manager.add_objects(
-                            managed_objects_builder(items)
-                        )
-                    case "tasks":
-                        component.add_tasks(tasks_builder(items))
-            app.add_component(component)
-        apps.append(app)
-    return apps
-
-
-@app.command()
-def keeper(
+@keeper.command()
+def add_app_via_cli(
     comms_port: int = typer.Option(
         8888,
         "--comms-port",
@@ -289,47 +368,28 @@ def keeper(
         envvar=f"{PREFIX}_VAULT_DIR",
         show_envvar=False,
     ),
-    loadout_path: str = typer.Option(
-        None,
-        "--loadout-path",
-        "-l",
-        envvar=f"{PREFIX}_LOADOUT_PATH",
-        show_envvar=False,
-    ),
-    managed_objects: str = typer.Option(
+    state_directives: str = typer.Option(
         "",
-        "--managed-objects",
+        "--state_directives",
         "-m",
-        envvar=f"{PREFIX}_MANAGED_OBJECTS",
+        envvar=f"{PREFIX}_STATE_DIRECTIVES",
         show_envvar=False,
-        help="""Comma seperated string of managed object paths.
+        help="""Comma seperated string of state directives.
         
-        Local files must be a relative path (relative to vault_dir)
-        Remote files can be relative (working_dir) or absolute
-        
-        If using local / remote files, file name must match
-
-        Any remote directories will be created if they don't exist
-
-        Example:
-
-        --managed-files file1.py,file2.txt:/remote/path/file2.txt,file3.py:dir/file3.py
-        """,
+        Update this""",
     ),
-    polling_interval: int = typer.Option(
-        300,
-        "--polling-interval",
-        "-i",
-        envvar=f"{PREFIX}_POLLING_INTERVAL",
+    remote_workdirs: str = typer.Option(
+        None,
+        "--remote-workdirs",
+        "-l",
+        envvar=f"{PREFIX}_REMOTE_WORKDIRS",
         show_envvar=False,
     ),
-    run_once: bool = typer.Option(
-        False,
-        "--run-once",
-        "-o",
-        envvar=f"{PREFIX}_RUN_ONCE",
+    signing_address: str = typer.Option(
+        "",
+        envvar=f"{PREFIX}_SIGNING_ADDRESS",
         show_envvar=False,
-        help="Contact agents once and exit",
+        help="This is used to associate private key in keychain",
     ),
     agent_ips: str = typer.Option(
         "",
@@ -345,72 +405,85 @@ def keeper(
         show_envvar=False,
         help="Whether or not to sign outbound connections",
     ),
-    signing_address: str = typer.Option(
-        "",
-        envvar=f"{PREFIX}_SIGNING_ADDRESS",
-        show_envvar=False,
-        help="This is used to associate private key in keychain",
-    ),
-    gui: bool = typer.Option(
-        False,
-        "--gui",
-        "-g",
-        envvar=f"{PREFIX}_GUI",
-        show_envvar=False,
-        hidden=True,
-        help="Run local gui server",
-    ),
 ):
 
     if not vault_dir:
         vault_dir = Path().home() / ".vault"
 
+    if sign_connections:
+        signing_address = get_signing_key()
+        if not signing_address:
+            raise ValueError(
+                "signing_address must be provided if signing connections (keyring)"
+            )
+
     agent_ips = agent_ips.split(",")
     agent_ips = list(filter(None, agent_ips))
 
-    managed_objects = managed_objects.split(",")
-    managed_objects = list(filter(None, managed_objects))
+    state_directives = state_directives.split(",")
+    state_directives = list(filter(None, state_directives))
 
-    apps_config = []
+    apps = []
 
-    # this ignores any other command line directive
-    if loadout_path:
-        configs = build_apps_from_loadout_file(loadout_path)
-        apps_config.extend(configs)
+    # configure single app via command line parameters, Must have state_directives
 
-    # configure single app via command line parameters, Must have managed_objects
-    elif app_name:
-        if not managed_objects:
-            raise ValueError(
-                "If running single app (if app_name is set) you must pass in managed-files via cli param, alternatively, try using a loadout"
-            )
-        config = build_app_from_cli(
-            app_name,
-            managed_objects,
-            sign_connections,
-            signing_address,
-            agent_ips,
-            run_once,
-            polling_interval,
-            comms_port,
-        )
-        apps_config.append(config)
+    # config = build_app_from_cli(
+    #     app_name,
+    #     state_directives,
+    #     signing_address,
+    #     comms_port,
+    #     remote_workdirs,
+    # )
+    # apps.append(config)
 
-    else:
-        raise ValueError("Either app_name or loadout_path must be specified")
-    # Make sure all params are getting passed into app config first (ports etc)
+    # WRITE APPS TO DISK
+
+
+@keeper.command()
+def run(
+    # Just disabling this for a while to focus on filesystem stuff
+    # gui: bool = typer.Option(
+    #     False,
+    #     "--gui",
+    #     "-g",
+    #     envvar=f"{PREFIX}_GUI",
+    #     show_envvar=False,
+    #     hidden=True,
+    #     help="Run local gui server",
+    # ),
+    polling_interval: int = typer.Option(
+        300,
+        "--polling-interval",
+        "-i",
+        envvar=f"{PREFIX}_POLLING_INTERVAL",
+        show_envvar=False,
+    ),
+    run_once: bool = typer.Option(
+        False,
+        "--run-once",
+        "-o",
+        envvar=f"{PREFIX}_RUN_ONCE",
+        show_envvar=False,
+        help="Contact agents once and exit",
+    ),
+):
+    # this takes app name, and any runtime stuff and sparks up app.
+    # reads config from directives folder based on app.
 
     flux_keeper = FluxKeeper(
-        apps_config=apps_config,
-        vault_dir=vault_dir,
-        gui=gui,
+        # gui=gui,
     )
 
     async def main():
-        await flux_keeper.manage_apps()
+        await flux_keeper.manage_apps(run_once, polling_interval)
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    try:
+        loop.run_until_complete(main())
+    except Exception as e:
+        log.error(repr(e))
+    finally:
+        flux_keeper.cleanup()
 
 
 @app.command()
@@ -583,10 +656,11 @@ def main(
         show_envvar=False,
     ),
 ):
-    configure_logs(enable_logfile, logfile_path, debug)
+    # configure_logs(enable_logfile, logfile_path, debug)
+    ...
 
 
-@app.command()
+@keeper.command()
 def remove_private_key(zelid: str):
     try:
         keyring.delete_password("fluxvault_app", zelid)

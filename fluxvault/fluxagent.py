@@ -9,19 +9,13 @@ import pty
 import ssl
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
-import typing
 
 import aiofiles
 import aioshutil
 from aiofiles import os as aiofiles_os
 from aiohttp import ClientSession
-from fluxrpc.auth import SignatureAuthProvider
-from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
-from fluxrpc.server import RPCServer
-from fluxrpc.transports.socket.server import EncryptedSocketServerTransport
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -31,9 +25,13 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
 )
 from cryptography.x509.oid import ExtensionOID, NameOID
+from fluxrpc.auth import SignatureAuthProvider
+from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
+from fluxrpc.server import RPCServer
+from fluxrpc.transports.socket.server import EncryptedSocketServerTransport
 
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.helpers import get_app_and_component_name, bytes_to_human
+from fluxvault.helpers import bytes_to_human, get_app_and_component_name
 from fluxvault.log import log
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
 
@@ -319,12 +317,7 @@ class FluxAgent:
         to remove this again for each hash to give back common path format"""
         hashes = {}
         p = Path(dir)
-        # path_relative_to_workdir = False
         try:
-            # if not p.is_absolute():
-            #     p = self.working_dir / p
-            #     path_relative_to_workdir = True
-
             if not p.exists():
                 return hashes
 
@@ -337,12 +330,6 @@ class FluxAgent:
 
                 elif path.is_file():
                     hashes.update(await self.get_file_hash(path))
-
-            # if path_relative_to_workdir:
-            #     hashes = {
-            #         str(Path(k).relative_to(self.working_dir)): v
-            #         for k, v in hashes.items()
-            #     }
         except Exception as e:
             print(repr(e))
             raise
@@ -351,9 +338,6 @@ class FluxAgent:
 
     async def remove_object(self, obj: str):
         p = Path(obj)
-
-        # if not p.is_absolute():
-        #     p = self.working_dir / p
 
         if p.exists():
             if p.is_dir():
@@ -376,10 +360,7 @@ class FluxAgent:
 
         p = Path(path)
 
-        # if not p.is_absolute():
-        #     p = self.working_dir / p
-
-        # p.parent.mkdir(parents=True, exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
 
         if is_dir:
             p.mkdir(parents=True, exist_ok=True)
@@ -409,25 +390,6 @@ class FluxAgent:
         #         return
         #     except Exception as e:
         #         print(f"Tarfile error: {repr(e)}")
-
-    # async def handle_file_stream(
-    #     self, path: Path, mode: str, executable: bool, data: bytes, eof: bool
-    # ):
-    #     if path not in self.file_handles:
-    #         print(f"New file to write received {path}")
-    #         # this will make the file being written executable
-    #         opener = self.opener if executable else None
-    #         self.file_handles[path] = await aiofiles.open(path, mode, opener=opener)
-    #         # tar = tarfile.open(fileobj=self.fh, mode="r|bz2")
-    #         # asyncio.create_task(self.write_tarfile(msg.path, tar))
-
-    #     # this has to be first so empty files created
-    #     await self.file_handles[path].write(data)
-
-    #     if eof:
-    #         await self.file_handles[path].close()
-    #         del self.file_handles[path]
-    #         return
 
     async def get_subagents(self):
         agents = {}
@@ -485,9 +447,6 @@ class FluxAgent:
     async def load_plugins(self, directory: str):
         p = Path(directory)
 
-        # if not p.is_absolute():
-        #     p = self.working_dir / p
-
         log.info(f"loading plugins from directory {p}")
 
         # print(os.getcwd())
@@ -495,9 +454,7 @@ class FluxAgent:
 
         # or p.stat().st_size == 0:
         p.mkdir(parents=True, exist_ok=True)
-        # if not p.exists():
-        #     log.error("Plugin directory does not exist, skipping")
-        #     return
+
         plugins = [
             f.rstrip(".py") for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))
         ]

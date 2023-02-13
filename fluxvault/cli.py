@@ -222,6 +222,7 @@ def list_apps(
             continue
 
         with open(app_dir / "config.yaml", "r") as stream:
+            ...
             # pop elements so we don't write jumk
         #     config = yaml.safe_load(stream)
         #     for app_name, directives in config.items():

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import binascii
-import bisect
 from collections.abc import Callable
 
 # from typing import TYPE_CHECKING
@@ -12,7 +11,6 @@ from pathlib import Path
 from typing import BinaryIO, Generator
 
 import aiofiles
-from jinja2 import BaseLoader, Environment
 
 from fluxvault.helpers import RemoteStateDirective
 from fluxvault.log import log

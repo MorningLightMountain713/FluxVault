@@ -266,11 +266,7 @@ def add_apps_via_loadout_file(
     for app_name, directives in apps.items():
         app_directives: dict = global_defaults | directives
 
-        # this is a special directive to get the defaults into the component yaml
-        # if the punter desires
-
         if groups := app_directives.get("groups"):
-            # groups: dict = app_directives.pop("groups", None)
             for group_name, group in groups.items():
                 if directives := group.get("state_directives", None):
                     for d in directives:
@@ -290,12 +286,8 @@ def add_apps_via_loadout_file(
         groups_dir.mkdir(parents=True, exist_ok=True)
         components_dir.mkdir(parents=True, exist_ok=True)
 
-        # app_wide_state_directives = app_directives.pop("state_directives", [])
-        # for d in app_wide_state_directives:
-        #     d["content_source"] = f"staging/{d['content_source']}"
-
         components: dict = app_directives.pop("components")
-        for component_name, component_directives in components.items():
+        for component_directives in components.values():
             if not component_directives.get("remote_workdir"):
                 component_directives["remote_workdir"] = app_directives.get(
                     "remote_workdir"
@@ -305,22 +297,6 @@ def add_apps_via_loadout_file(
                 groups.append("all")
             else:
                 component_directives["member_of"] = ["all"]
-
-            # if app_wide_state_directives:
-            #     if "state_directives" in component_directives:
-            #         for d in components[component_name]["state_directives"]:
-            #             if d.get("content_source"):
-            #                 d[
-            #                     "content_source"
-            #                 ] = f"components/{component_name}/staging/{d['content_source']}"
-
-            #         components[component_name]["state_directives"].extend(
-            #             app_wide_state_directives
-            #         )
-            #     else:
-            #         components[component_name][
-            #             "state_directives"
-            #         ] = app_wide_state_directives
 
         app_directives.pop("remote_workdir")
         log.info(f"New config dir: {app_dir / 'config.yaml'}")
@@ -335,14 +311,6 @@ def add_apps_via_loadout_file(
             stream.write(
                 yaml.dump({"app_config": app_directives, "components": components})
             )
-
-        # POP COMPONENT CONFIG AND BUILD DIRS
-
-    # this ignores any other command line directive
-    # if loadout_path:
-    #     configs = build_apps_from_loadout_file(loadout_path)
-    #     apps.extend(configs)
-    # build directories.
 
 
 @keeper.command()

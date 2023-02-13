@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 
 import keyring
-import pandas
+# import pandas
 import typer
 import yaml
-from tabulate import tabulate
+# from tabulate import tabulate
 
 from fluxvault import FluxAgent, FluxKeeper
 from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
@@ -223,13 +223,13 @@ def list_apps(
 
         with open(app_dir / "config.yaml", "r") as stream:
             # pop elements so we don't write jumk
-            config = yaml.safe_load(stream)
-            for app_name, directives in config.items():
-                components = directives.pop("components")
-                df = pandas.json_normalize(components)
-                print(df)
+        #     config = yaml.safe_load(stream)
+        #     for app_name, directives in config.items():
+        #         components = directives.pop("components")
+        #         df = pandas.json_normalize(components)
+        #         print(df)
 
-        dfs.append(df)
+        # dfs.append(df)
 
     # table = tabulate(dfs, headers="keys", tablefmt="psql", showindex=False)
     # typer.echo(table)

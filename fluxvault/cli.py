@@ -4,15 +4,18 @@ import logging
 from pathlib import Path
 
 import keyring
+
 # import pandas
 import typer
 import yaml
-# from tabulate import tabulate
 
 from fluxvault import FluxAgent, FluxKeeper
 from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
 from fluxvault.helpers import SyncStrategy
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
+
+# from tabulate import tabulate
+
 
 PREFIX = "FLUXVAULT"
 

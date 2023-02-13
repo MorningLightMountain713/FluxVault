@@ -127,15 +127,17 @@ class FluxKeeper:
 
     def qualify_vault_dir(self, dir: str):
         if not dir:
-            self.vault_dir = Path().home() / ".vault"
-            return
+            vault_dir = Path().home() / ".vault"
+        else:
+            vault_dir = Path(dir)
 
-        vault_dir = Path(dir)
+        if not vault_dir.is_absolute():
+            raise ValueError(f"Invalid vault dir: {vault_dir}, must be absolute")
 
-        if not vault_dir.is_dir() and not vault_dir.is_absolute():
-            raise ValueError(
-                f"Invalid vault dir: {vault_dir}, must exist and be absolute"
-            )
+        if not vault_dir.is_dir():
+            vault_dir.mkdir(parents=True)
+
+        self.vault_dir = vault_dir
 
     def state_directives_builder(self, remote_workdir: Path, fs_entries: list) -> list:
         state_directives = []

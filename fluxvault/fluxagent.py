@@ -264,9 +264,16 @@ class FluxAgent:
         }
 
     async def crc_file(self, filename: Path, crc: int) -> int:
-        async with aiofiles.open(filename, "rb") as f:
-            data = await f.read()
-            crc = binascii.crc32(data, crc)
+        try:
+            async with aiofiles.open(filename, "rb") as f:
+                data = await f.read()
+                crc = binascii.crc32(data, crc)
+        except PermissionError:
+            log.error(
+                f"Permission error reading file {filename}. Unable to checksum. Skipping"
+            )
+            # do something here?!?
+            pass
 
         return crc
 
@@ -301,10 +308,12 @@ class FluxAgent:
     async def get_all_object_hashes(self, objects: list) -> list:
         """Returns the crc32 for each object that is being managed"""
         log.info(f"Returning crc's for {len(objects)} object(s)")
+
         tasks = []
         for obj in objects:
             tasks.append(self.loop.create_task(self.get_object_crc(obj)))
         results = await asyncio.gather(*tasks)
+
         return results
 
     async def get_file_hash(self, file: Path):

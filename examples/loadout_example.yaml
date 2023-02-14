@@ -88,7 +88,7 @@ apps:
             # if content_source isn't used, fluxvault will look in the component staging_dir to see if an 
             # objects name matches. This could potentially be problematic, if it doubt, use content_source. Name / remote dir
             # is more for if you put your objects directly in fake_root.
-          - name: weiner
+          - name: salami
             remote_dir: /tmp/jumbo
             sync_strategy: STRICT
         # managed_tasks: NOT IMPLEMENTED (YET)
@@ -104,7 +104,7 @@ apps:
 # If you need to run multiple apps, or different workdirs per component - use a loadout.
 
 
-# Componens: <name 1>:<group 1>:<group n>,<name 2>:<group 7>,<name 3>
+# Components: <name 1>:<group 1>:<group n>,<name 2>:<group 7>,<name 3>
 #                                 <app-name>       <components>
 # fluxvault keeper run-single-app gravyboat fluxagent:seagulls,127.0.0.1
 # --remote-workdir /tmp/stuff \

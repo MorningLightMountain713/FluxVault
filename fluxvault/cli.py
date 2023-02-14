@@ -114,6 +114,23 @@ def get_signing_key(signing_address) -> str:
     return signing_key
 
 
+@keeper.command(help="Dump all addresses for stored private keys")
+def list_signing_key_addresses():
+    ...
+
+
+@keeper.command(help="Add signing key to your devices secure storage")
+def add_signing_key(
+    signing_address: str = typer.Argument(
+        ...,
+        envvar=f"{PREFIX}_SIGNING_ADDRESS",
+        show_envvar=False,
+        help="The address you would like to use for signing messages",
+    )
+):
+    get_signing_key(signing_address)
+
+
 @keeper.command(help="List all apps that are available to run")
 def list_apps(
     vault_dir: str = typer.Option(
@@ -149,10 +166,54 @@ def list_apps(
     # typer.echo(table)
 
 
-@keeper.command(help="Load new apps into config, use `run` method to run them")
+@keeper.command(
+    help="""Load new apps into config, use `run` method to run them
+                Example:
+                
+                apps:
+                    gravyboat:
+                        # vault_dir: /Users/bob/custom_vaultdir
+                        remote_workdir: /tmp/gravyboat
+                        fluxnode_ips: [172.26.26.126]
+                        comms_port: 8888
+                        groups:
+                        # all components are automatically a member of this group
+                        all:
+                            state_directives:
+                            # this is saying where the actual file is located
+                            - content_source: chud.txt
+                                # this remote path is absolute, so the final path on the agent will be /tmp/chudder/chud.txt
+                                remote_dir: /tmp/chudder
+                        # this is a custom group
+                        seagulls:
+                            state_directives:
+                            - content_source: crankyseagull
+                                remote_dir: /tmp/jumbo
+                        components:
+                        127.0.0.1: # this would normally be a friendly component name, but on my test machine, just using ip
+                            # these are specific to a component
+                            remote_workdir: /tmp/127
+                            state_directives:
+                            - name: blah.txt
+                                # this remote path is relative, so the final path on the agent will be /tmp/127/blah/blah.txt
+                                remote_dir: blah
+                        fluxagent: # this is a component name
+                            # this component will receive objects from the  `seagulls` group
+                            member_of: [seagulls]
+                            state_directives:
+                            - content_source: blah.txt
+                                # this file gets crc checked and replaced if different
+                                sync_strategy: STRICT
+                                # if content_source isn't used, fluxvault will look in the component staging_dir to see if an 
+                                # objects name matches. This could potentially be problematic, if it doubt, use content_source. Name / remote dir
+                                # is more for if you put your objects directly in fake_root.
+                            - name: salami
+                                remote_dir: /tmp/jumbo
+                                sync_strategy: STRICT"""
+)
 def add_apps_via_loadout_file(
     loadout_path: str = typer.Argument(
-        default=None,
+        ...,
         envvar=f"{PREFIX}_LOADOUT_PATH",
         show_envvar=False,
     )

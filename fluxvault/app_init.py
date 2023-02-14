@@ -1,6 +1,6 @@
 import os
 
-# import sqlite3
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -48,21 +48,24 @@ def generate_wallet():
     print(f"receive address: {key.address}")
 
 
-def first_run(root):
-    root.mkdir(parents=True)
+def first_run(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
     os.environ["FW_INIT_DATA_DIR"] = str(root / ".wallet")
 
     db_dir = root / "db"
-    apps_dir = root / "apps"
     generic_vault_dir = Path().home() / ".vault"
 
-    apps_dir.mkdir()
-    db_dir.mkdir()
-    generic_vault_dir.mkdir()
+    db_dir.mkdir(parents=True, exist_ok=True)
+    generic_vault_dir.mkdir(parents=True, exist_ok=True)
 
-    # con = sqlite3.connect(db_dir / "fluxvault.db")
-    # cursor = con.cursor()
-    # cursor.execute("CREATE TABLE fluxvault...
+    con = sqlite3.connect(db_dir / "fluxvault.db")
+    cursor = con.cursor()
+    cursor.execute(
+        """CREATE TABLE STORED_KEYS
+                   (id INTEGER PRIMARY KEY,
+                   address varchar(35) NOT NULL)"""
+    )
+
     # cursor.execute("INSERT INTO...
     # do database stuff
     generate_wallet()

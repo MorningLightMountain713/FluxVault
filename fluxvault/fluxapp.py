@@ -90,6 +90,10 @@ class FluxComponent:
         staging_dir: Path = self.local_workdir / "staging"
         groups_dir: Path = app_root / "groups"
 
+        fake_root.mkdir(parents=True, exist_ok=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        groups_dir.mkdir(parents=True, exist_ok=True)
+
         files_in_root = ConcreteFsEntry.are_files_in_dir(fake_root)
 
         if files_in_root:
@@ -110,7 +114,10 @@ class FluxComponent:
         created_symlinks = []
 
         for group in self.member_of:
-            group_entries = ConcreteFsEntry.entries_in_dir(groups_dir / group)
+            group_dir = groups_dir / group
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            group_entries = ConcreteFsEntry.entries_in_dir(group_dir)
 
             for path in group_entries:
                 remote_path: Path = self.remote_workdir / path.name

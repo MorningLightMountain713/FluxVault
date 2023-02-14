@@ -114,7 +114,7 @@ def get_signing_key(signing_address) -> str:
     return signing_key
 
 
-@keeper.command()
+@keeper.command(help="List all apps that are available to run")
 def list_apps(
     vault_dir: str = typer.Option(
         None,
@@ -149,7 +149,7 @@ def list_apps(
     # typer.echo(table)
 
 
-@keeper.command()
+@keeper.command(help="Load new apps into config, use `run` method to run them")
 def add_apps_via_loadout_file(
     loadout_path: str = typer.Argument(
         default=None,
@@ -227,7 +227,7 @@ def add_apps_via_loadout_file(
             )
 
 
-@keeper.command()
+@keeper.command(help="Run command based on CLI parameters only")
 def run_single_app(
     app_name: str = typer.Argument(
         ...,
@@ -263,8 +263,12 @@ def run_single_app(
         envvar=f"{PREFIX}_STATE_DIRECTIVES",
         show_envvar=False,
         help="""Comma seperated string of state directives.
-        
-        Update this""",
+
+        Format for state-directive  <local-path>:<remote-path-prefix>:<sync-strat>@<component>
+
+        SYNC_STRAT: S = STRICT, C = ENSURE_CREATED, A = ALLOW_ADDS
+
+        For example: blah.txt:/tmp/myfiles:S@fluxagent""",
     ),
     remote_workdir: str = typer.Option(
         Path("/tmp"),
@@ -424,7 +428,7 @@ def run_single_app(
         flux_keeper.cleanup()
 
 
-@keeper.command()
+@keeper.command(help="Run keeper; loads all apps from vault dir")
 def run(
     # Just disabling this for a while to focus on filesystem stuff
     # gui: bool = typer.Option(
@@ -436,6 +440,13 @@ def run(
     #     hidden=True,
     #     help="Run local gui server",
     # ),
+    vault_dir: str = typer.Option(
+        Path().home() / ".vault",
+        "--vault-dir",
+        "-d",
+        envvar=f"{PREFIX}_VAULT_DIR",
+        show_envvar=False,
+    ),
     polling_interval: int = typer.Option(
         300,
         "--polling-interval",
@@ -457,6 +468,7 @@ def run(
 
     flux_keeper = FluxKeeper(
         # gui=gui,
+        vault_dir=vault_dir,
     )
 
     async def main():
@@ -645,7 +657,7 @@ def main(
     ...
 
 
-@keeper.command()
+@keeper.command(help="Delete specified private key from keyring")
 def remove_private_key(zelid: str):
     try:
         keyring.delete_password("fluxvault_app", zelid)

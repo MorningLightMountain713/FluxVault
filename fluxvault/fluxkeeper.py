@@ -77,7 +77,8 @@ class FluxKeeper:
     # GUI hidden via cli, no where near ready
     def __init__(
         self,
-        vault_dir: str | None = None
+        vault_dir: str | None = None,
+        app: FluxApp | None = None,
         # gui: bool = False,
     ):
 
@@ -91,25 +92,29 @@ class FluxKeeper:
         self.qualify_vault_dir(vault_dir)
         self.apps: list[FluxApp] = []
 
-        for app_dir in self.vault_dir.iterdir():
-            if not app_dir.is_dir():
-                continue
+        # Allow one app to be passed in, otherwise - look up config
+        if app and isinstance(app, FluxApp):
+            self.apps.append(app)
+        else:
+            for app_dir in self.vault_dir.iterdir():
+                if not app_dir.is_dir():
+                    continue
 
-            try:
-                with open(app_dir / CONFIG_NAME, "r") as stream:
-                    try:
-                        config = yaml.safe_load(stream)
-                    except yaml.YAMLError as e:
-                        raise ValueError(
-                            f"Error parsing vault config file: {CONFIG_NAME} for app {app_dir}. Exc: {e}"
-                        )
-            except (FileNotFoundError, PermissionError) as e:
-                raise ValueError(
-                    f"Error opening config file {CONFIG_NAME} for app {app_dir}. Exc: {e}"
+                try:
+                    with open(app_dir / CONFIG_NAME, "r") as stream:
+                        try:
+                            config = yaml.safe_load(stream)
+                        except yaml.YAMLError as e:
+                            raise ValueError(
+                                f"Error parsing vault config file: {CONFIG_NAME} for app {app_dir}. Exc: {e}"
+                            )
+                except (FileNotFoundError, PermissionError) as e:
+                    raise ValueError(
+                        f"Error opening config file {CONFIG_NAME} for app {app_dir}. Exc: {e}"
+                    )
+                self.apps.append(
+                    self.build_app(app_dir.name, self.vault_dir / app_dir.name, config)
                 )
-            self.apps.append(
-                self.build_app(app_dir.name, self.vault_dir / app_dir.name, config)
-            )
 
         log.info(f"App Data directory: {self.root_dir}")
         log.info(f"Global Vault directory: {self.vault_dir}")
@@ -139,7 +144,10 @@ class FluxKeeper:
 
         self.vault_dir = vault_dir
 
-    def state_directives_builder(self, remote_workdir: Path, fs_entries: list) -> list:
+    @classmethod
+    def state_directives_builder(
+        cls, local_relative: Path, remote_workdir: Path, fs_entries: list
+    ) -> list:
         state_directives = []
         for fs_entry in fs_entries:
             parent = None
@@ -149,12 +157,21 @@ class FluxKeeper:
                 content_source = Path(content_source)
                 name = content_source.name
                 parent = content_source.parent
+            else:
+                # this is debatable, maybe simplier just to make it if you
+                # want to manipulate a files location in the tree, you must
+                # supply the content source.
 
-            absolute_dir = (
-                Path(fs_entry.get("remote_dir"))
-                if fs_entry.get("remote_dir")
-                else remote_workdir
-            )
+                # try the root of the staging dir
+                parent = local_relative
+
+            if remote_dir := fs_entry.get("remote_dir"):
+                if Path(remote_dir).is_absolute():
+                    absolute_dir = Path(remote_dir)
+                else:
+                    absolute_dir = remote_workdir / remote_dir
+            else:
+                absolute_dir = remote_workdir
 
             sync_strategy = SyncStrategy[
                 fs_entry.get("sync_strategy", SyncStrategy.ENSURE_CREATED.name)
@@ -170,16 +187,16 @@ class FluxKeeper:
     # do this as a lambda?
     # flux_tasks = []
     # map(lambda x: flux_tasks.append(FluxTask(x.get("name"), x.get("params"))), tasks)
-    def tasks_builder(self, tasks: list) -> list:
+    @classmethod
+    def tasks_builder(cls, tasks: list) -> list:
         flux_tasks = []
         for task in tasks:
             flux_task = FluxTask(task.get("name"), task.get("params"))
             flux_tasks.append(flux_task)
         return flux_tasks
 
-    def build_app(self, name: str, app_dir: str, config: dict) -> FluxApp:
-        # state_directives = params.pop("state_directives", [])
-
+    @classmethod
+    def build_app(cls, name: str, app_dir: str, config: dict) -> FluxApp:
         log.info(f"User config:\n")
         pprint(config)
         print()
@@ -189,7 +206,7 @@ class FluxKeeper:
 
         app = FluxApp(name, root_dir=app_dir, **app_config)
 
-        components_config = config.get("components", [])
+        components_config = config.get("components", {})
 
         for component_name, directives in components_config.items():
             remote_workdir = directives.pop("remote_workdir")
@@ -197,9 +214,14 @@ class FluxKeeper:
             if not Path(remote_workdir).is_absolute():
                 raise ValueError(f"Remote workdir {remote_workdir} is not absolute")
 
+            local_workdir = app_dir / "components" / component_name
+
+            # this is if the content source doesn't exist... we try here
+            relative_dir = Path("components") / component_name / "staging"
+
             component = FluxComponent(
                 component_name,
-                local_workdir=app_dir / "components" / component_name,
+                local_workdir=local_workdir,
                 remote_workdir=Path(remote_workdir),
             )
 
@@ -220,11 +242,14 @@ class FluxKeeper:
                 match directive:
                     case "state_directives":
                         component.state_manager.add_directives(
-                            self.state_directives_builder(Path(remote_workdir), data)
+                            FluxKeeper.state_directives_builder(
+                                relative_dir, Path(remote_workdir), data
+                            )
                         )
                     case "tasks":
-                        component.add_tasks(self.tasks_builder(data))
+                        component.add_tasks(FluxKeeper.tasks_builder(data))
             app.add_component(component)
+
         log.info("Built app config:\n")
         pprint(app)
         print()
@@ -369,10 +394,12 @@ class FluxAppManager:
         return list(filter(lambda x: not x.is_proxied, self.agents))
 
     def build_agents(self):
+        loop = asyncio.get_event_loop()
+
         fluxnode_ips = (
             self.app.fluxnode_ips
             if self.app.fluxnode_ips
-            else self.get_fluxnode_ips(self.app.name)
+            else loop.run_until_complete(self.get_fluxnode_ips(self.app.name))
         )
 
         if not self.app.signing_key and self.app.sign_connections:

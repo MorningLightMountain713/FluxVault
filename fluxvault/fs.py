@@ -88,17 +88,17 @@ class FsType(Enum):
     UNKNOWN = 3
 
 
-# tree_symbols = {
-#     "root_path": lambda size, path: f"{bytes_to_human(size)} {bcolors.OKBLUE}{path}{bcolors.ENDC}",
-#     "root_path_last_file": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {path.name}",
-#     "root_path_not_last_file": lambda prefix, size, path: f"{prefix}├── {bytes_to_human(size)} {path.name}",
-#     "dir_terminal": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
-#     "dir_not_terminal": lambda prefix, size, path: f"{prefix}├── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
-#     "file_terminal_dir_last_file": lambda prefix, size, path: f"{prefix}{'    '}└── {bytes_to_human(size)} {path.name}",
-#     "file_terminal_dir_not_last_file": lambda prefix, size, path: f"{prefix}{'    '}├── {bytes_to_human(size)} {path.name}",
-#     "file_not_terminal_dir_last_file": lambda prefix, size, path: f"{prefix}{'│   '}└── {bytes_to_human(size)} {path.name}",
-#     "file_not_terminal_dir_not_last_file": lambda prefix, size, path: f"{prefix}{'│   '}├── {bytes_to_human(size)} {path.name}",
-# }
+FORMATS: dict[str, Callable] = {
+    "root_path": lambda size, path: f"{bytes_to_human(size)} {bcolors.OKBLUE}{path}{bcolors.ENDC}",
+    "root_path_last_file": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {path.name}",
+    "root_path_not_last_file": lambda prefix, size, path: f"{prefix}├── {bytes_to_human(size)} {path.name}",
+    "dir_terminal": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
+    "dir_not_terminal": lambda prefix, size, path: f"{prefix}├── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
+    "file_terminal_dir_last_file": lambda prefix, size, path: f"{prefix}{'    '}└── {bytes_to_human(size)} {path.name}",
+    "file_terminal_dir_not_last_file": lambda prefix, size, path: f"{prefix}{'    '}├── {bytes_to_human(size)} {path.name}",
+    "file_not_terminal_dir_last_file": lambda prefix, size, path: f"{prefix}{'│   '}└── {bytes_to_human(size)} {path.name}",
+    "file_not_terminal_dir_not_last_file": lambda prefix, size, path: f"{prefix}{'│   '}├── {bytes_to_human(size)} {path.name}",
+}
 
 
 @dataclass
@@ -119,6 +119,7 @@ class ConcreteFsEntry:
             True: "    ",
             False: "│   ",
         }
+
         # object_symbols = {"not_last": "├── ", "last": "└── "}
         # file_symbols = {"not_last_dir": "│   ", "last_dir": "    "}
 
@@ -169,6 +170,7 @@ class ConcreteFsEntry:
                     file_type = "file_not_terminal_dir_last_file"
             formatted_files.append(self.formatter(file_type)(*params))
 
+        # the str(d) list comp is recursive. I.e. - it calls this function
         return "\n".join([directory, *formatted_files, *[str(d) for d in dirs]])
 
     @classmethod
@@ -177,7 +179,7 @@ class ConcreteFsEntry:
             return
 
         for child in dir.iterdir():
-            log.info(f"Root object: {child}")
+            log.info(f"Existing fake root object: {child} (before linking)")
 
     @classmethod
     def contains(cls, name: Path, dir: Path) -> bool:
@@ -281,25 +283,11 @@ class ConcreteFsEntry:
 
     @staticmethod
     def formatter(section) -> Callable:
-        # could still break this down further
-        # this seems expensive? just set formats once. don't use staticmethod
-        formats = {
-            "root_path": lambda size, path: f"{bytes_to_human(size)} {bcolors.OKBLUE}{path}{bcolors.ENDC}",
-            "root_path_last_file": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {path.name}",
-            "root_path_not_last_file": lambda prefix, size, path: f"{prefix}├── {bytes_to_human(size)} {path.name}",
-            "dir_terminal": lambda prefix, size, path: f"{prefix}└── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
-            "dir_not_terminal": lambda prefix, size, path: f"{prefix}├── {bytes_to_human(size)} {bcolors.OKBLUE}{path.name}{bcolors.ENDC}",
-            "file_terminal_dir_last_file": lambda prefix, size, path: f"{prefix}{'    '}└── {bytes_to_human(size)} {path.name}",
-            "file_terminal_dir_not_last_file": lambda prefix, size, path: f"{prefix}{'    '}├── {bytes_to_human(size)} {path.name}",
-            "file_not_terminal_dir_last_file": lambda prefix, size, path: f"{prefix}{'│   '}└── {bytes_to_human(size)} {path.name}",
-            "file_not_terminal_dir_not_last_file": lambda prefix, size, path: f"{prefix}{'│   '}├── {bytes_to_human(size)} {path.name}",
-        }
-        return formats[section]
+        return FORMATS[section]
 
     def get_child(self, target: Path) -> ConcreteFsEntry | None:
         relative_path = target.relative_to(self.path)
-        child_index = self.children_index.get(relative_path, None)
-        if child_index != None:
+        if child_index := self.children_index.get(relative_path, None):
             return self.children[child_index]
 
     def get_partial_size(self, fragments: list[Path]) -> int:
@@ -343,6 +331,7 @@ class ConcreteFsEntry:
         """Get all ancestors up the file tree, finishing at root"""
         parents: list[ConcreteFsEntry] = []
         ancestor_count = self.depth
+
         while ancestor_count > 0:
             ancestor_count -= 1
             if not parents:
@@ -574,7 +563,8 @@ class FsEntryStateManager:
                 return
 
         if self.remote_crc == self.local_crc:
-            log.info(f"Agent object {self.name} is up to date... skipping!")
+            # generates too many log messages
+            # log.info(f"Agent object {self.name} is up to date... skipping!")
             self.in_sync = True
 
 

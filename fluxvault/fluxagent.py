@@ -273,7 +273,8 @@ class FluxAgent:
                 f"Permission error reading file {filename}. Unable to checksum. Skipping"
             )
             # do something here?!?
-            pass
+        except Exception as e:
+            log.error(f"Unknown error reading file: {repr(e)}")
 
         return crc
 
@@ -290,9 +291,6 @@ class FluxAgent:
 
     async def get_object_crc(self, path: str) -> int:
         p = Path(path)
-
-        # if not p.is_absolute():
-        #     p = self.working_dir / p
 
         if not p.exists():
             crc = 0

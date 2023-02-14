@@ -5,8 +5,10 @@
 
 # Keeper can now sync directories as well as files
 
-# All directories are tarred and gz2 compressed, then untarred on the remote end. All files under 1Mb
-# are trasferred uncompressed, over 1Mb file is tarred / compressed and sent. 
+# All files under 50Mb are sent inband, anything larger is chunked and streamed (encrypted)
+
+# All files / dirs in staging, and all files / dirs in appropriate groups are symlinked into fake_root
+# (the remote root dir, a.k.a /) then transfered. These symlinks are removed upon termination 
 
 # sync strategy can be one of the following (default is STRICT) it only applies to directories
 # Files are STRICT by default (any other options ignored)
@@ -29,89 +31,100 @@
 
 # {vault_dir}
 #   {appname}
-#     common
+#     groups
+#       {all}
+#       {custom group 1}
 #     {component 1}
-#     {component 2} 
+#       staging
+#       fake_root
+#     {component 2}
+#       staging
+#       fake_root
 
 # files must reside in the above directories if they are to be transfered to agents
 
-# ANCHORS AND MERGE OPERATOR
+# GROUPS
 
+# As well as the inbuilt `all` group, you can create custom groups and join them via the component config
 # this is handy if you have files that you want to share across several, but not all components.
-# You can use an anchor to define the object once, then use the Merge Key operator to merge into the component
 
-# If a file isn't found on a component, it will try the global files. So in the above, where you are merging in
-# files on components, you can just stick the one copy of the file in the common directory
-
-# If you want your component to receive global files only, it must still have an entry in the components secion
-# this can be as simple as adding a mapping like  `mycomponent: {}`
-
+# note, the folder structure controls WHAT files get put on a remote machine;
+# by default, they get put in the remote_workdir. The state directives control WHERE on the remote machine
+# the files go, and HOW they are synced
 apps:
   gravyboat:
-    # vault_dir: /Users/davew/.vault
+    # vault_dir: /Users/bob/custom_vaultdir
     remote_workdir: /tmp/gravyboat
     fluxnode_ips: [172.26.26.126]
     comms_port: 8888
     groups:
+      # all components are automatically a member of this group
       all:
         state_directives:
+          # this is saying where the actual file is located
           - content_source: chud.txt
             # this remote path is absolute, so the final path on the agent will be /tmp/chudder/chud.txt
             remote_dir: /tmp/chudder
+      # this is a custom group
       seagulls:
         state_directives:
           - content_source: crankyseagull
             remote_dir: /tmp/jumbo
-    # defaults: &defaults
-    #   - content_source: crankyseagull
-    #     remote_dir: /tmp/jumbo
-
     components:
       127.0.0.1: # this would normally be a friendly component name, but on my test machine, just using ip
         # these are specific to a component
         remote_workdir: /tmp/127
         state_directives:
           - name: blah.txt
-            remote_prefix: blah
+            # this remote path is relative, so the final path on the agent will be /tmp/127/blah/blah.txt
+            remote_dir: blah
       fluxagent: # this is a component name
+        # this component will receive objects from the  `seagulls` group
         member_of: [seagulls]
         state_directives:
           - content_source: blah.txt
+            # this file gets crc checked and replaced if different
             sync_strategy: STRICT
+            # if content_source isn't used, fluxvault will look in the component staging_dir to see if an 
+            # objects name matches. This could potentially be problematic, if it doubt, use content_source. Name / remote dir
+            # is more for if you put your objects directly in fake_root.
           - name: weiner
-            remote_dir: /tmp/gravyboat
+            remote_dir: /tmp/jumbo
             sync_strategy: STRICT
         # managed_tasks: NOT IMPLEMENTED (YET)
 
 
-# here is the equivalent using the command line. Note the command line params can only support one app.
-# If you need to run multiple apps - use a loadout.
+# Here is the equivalent using the command line. However, there are some limitations:
+
+# Only one app can be run at a time
+# Groups are enabled, but not group state directives
+# State directives can only be applied on components
+# All components inherit the same workdir from the app
+
+# If you need to run multiple apps, or different workdirs per component - use a loadout.
+
+
+# Componens: <name 1>:<group 1>:<group n>,<name 2>:<group 7>,<name 3>
+#                                 <app-name>       <components>
+# fluxvault keeper run-single-app gravyboat fluxagent:seagulls,127.0.0.1
+# --remote-workdir /tmp/stuff \
+# --agent-ips 192.168.4.27 \
+# --state-directives blah.txt:blah:S@127.0.0.1,weiner:/tmp/jumbo:S@fluxagent
+# --polling-interval 20
 
 # Obviously, using the CLI is error prone, if you are adding more than the odd file, use a loadout
 
-# CLI format for managed-objects  <local-path>:<remote-path-prefix>:<sync-strat>@<component>
+# CLI format for state-directive  <local-path>:<remote-path-prefix>:<sync-strat>@<component>
 
-# local path: REQUIRED. This is the local relative path on the keeper. It's relative to The level in the hierarchy.
-# If specified app wide - then the file must go in the appname/common directory in the vault. If specified on a component,
-# the file must reside in the appname/componentname directory in the vault
+# local path: REQUIRED. This is the local relative path on the keeper. It's relative to the staging dir
+# of the componet
 
 # remote path: OPTIONAL. This can be either absolute or relative. If relative, it's relative to the agent's working dir
-# If not specified, the local_path will be used with the working dir of the agent
-# sync strategy: OPTIONAL. Must be one of S, A, C. S = STRICT, A = ADDS_ALLOWED, C = ENSURE_CREATED. STRICT by default.
-
-# fluxvault keeper --app-name gravyboat --agent-ips 192.168.4.27 \
-# --managed-objects chud.txt:/tmp/,chumgo.txt:chunk/,blah.txt:/tmp/@127.0.0.1,quotes.txt@127.0.0.1,dogs@127.0.0.1,racing:C@127.0.0.1,crankyseagull:/tmp/jumbo@fluxagent,racing:/tmp/sally/:A@fluxagent \
-#  --polling-interval 20
-
-
-# fluxvault keeper --app-name gravyboat --agent-ips 192.168.4.27 \
-# --managed-objects chud.txt:/tmp/,chumgo.txt:chunk/,blah.txt:/tmp/@127.0.0.1,quotes.txt@127.0.0.1,dogs@127.0.0.1,racing:C@127.0.0.1,crankyseagull:/tmp/jumbo@fluxagent,racing:/tmp/sally/:A@fluxagent,VSCode-darwin-universal.zip@fluxagent,ubu/ubuntu-22.04.1-live-server-amd64.iso@fluxagent \
- # --polling-interval 20
+# If not specified, the local file / dir name will be used with the working dir of the agent
+# sync strategy: OPTIONAL. Must be one of S, A, C. S = STRICT, A = ADDS_ALLOWED, C = ENSURE_CREATED. ENSURE_CREATED by default.
 
  # state directives
- # To set sync_strategy on remote object (object is already in fake_root):
+ # To set sync_strategy on remote object (you have already put object in fake_root):
  # - name: file or dir name
  #   remote_dir: parent directory of file or dir
  #   sync_strategy: your sync strat
-
- # 

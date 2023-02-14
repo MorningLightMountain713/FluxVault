@@ -44,8 +44,8 @@ format = "%(name)s: %(message)s"
 logging.basicConfig(
     level="INFO",
     format=format,
-    datefmt="%Y-%m-%d %H:%M:%S%z",
-    handlers=[RichHandler(level="NOTSET", rich_tracebacks=True)],
+    datefmt="%d/%m/%y %H:%M:%S%z",
+    handlers=[RichHandler(level="NOTSET")],
 )
 
 # log = logging.getLogger("fluxvault")

@@ -13,6 +13,8 @@ from fluxvault import FluxAgent, FluxKeeper
 from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
 from fluxvault.helpers import SyncStrategy
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
+from fluxvault.fs import FsEntryStateManager
+
 
 # from tabulate import tabulate
 
@@ -41,28 +43,28 @@ class colours:
     UNDERLINE = "\033[4m"
 
 
-def configure_logs(log_to_file, logfile_path, debug):
-    vault_log = logging.getLogger("fluxvault")
-    fluxrpc_log = logging.getLogger("fluxrpc")
-    level = logging.DEBUG if debug else logging.INFO
+# def configure_logs(log_to_file, logfile_path, debug):
+#     vault_log = logging.getLogger("fluxvault")
+#     fluxrpc_log = logging.getLogger("fluxrpc")
+#     level = logging.DEBUG if debug else logging.INFO
 
-    formatter = logging.Formatter(
-        "%(asctime)s: fluxvault: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
-    )
+#     formatter = logging.Formatter(
+#         "%(asctime)s: fluxvault: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
+#     )
 
-    vault_log.setLevel(level)
-    fluxrpc_log.setLevel(level)
+#     vault_log.setLevel(level)
+#     fluxrpc_log.setLevel(level)
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    file_handler = logging.FileHandler(logfile_path, mode="a")
-    file_handler.setFormatter(formatter)
+#     stream_handler = logging.StreamHandler()
+#     stream_handler.setFormatter(formatter)
+#     file_handler = logging.FileHandler(logfile_path, mode="a")
+#     file_handler.setFormatter(formatter)
 
-    vault_log.addHandler(stream_handler)
-    fluxrpc_log.addHandler(stream_handler)
-    if log_to_file:
-        fluxrpc_log.addHandler(file_handler)
-        vault_log.addHandler(file_handler)
+#     vault_log.addHandler(stream_handler)
+#     fluxrpc_log.addHandler(stream_handler)
+#     if log_to_file:
+#         fluxrpc_log.addHandler(file_handler)
+#         vault_log.addHandler(file_handler)
 
 
 def yes_or_no(question, default="yes"):
@@ -112,99 +114,6 @@ def get_signing_key(signing_address) -> str:
     return signing_key
 
 
-def build_app_from_cli(
-    app_name,
-    state_directives,
-    signing_address,
-    agent_ips,
-    run_once,
-    polling_interval,
-    comms_port,
-    remote_workdirs,
-) -> FluxApp:
-
-    app = FluxApp(
-        app_name,
-        sign_connections=sign_connections,
-        signing_key=signing_address,
-        agent_ips=agent_ips,
-        run_once=run_once,
-        polling_interval=polling_interval,
-        comms_port=comms_port,
-    )
-
-    # THIS IS BROKEN RIGHT NOW
-
-    # /tmp/blah
-    # component1:/tmp/blah,component2:/tmp/crag,default:/tmp
-    # remote_workdirs = remote_workdirs.split(",")
-
-    common_objects = []
-    for obj_str in state_directives:
-        parts = obj_str.split("@")
-
-        component_name = ""
-        if len(parts) > 1:
-            component_name = parts[1]
-            obj_str = parts[0]
-
-        split_obj = obj_str.split(":")
-        local = Path(split_obj[0])
-
-        sync_strat = None
-        try:
-            remote = Path(split_obj[1])
-            # this will break on remote paths of S, A, or C"
-            if str(remote) in ["S", "A", "C"]:
-                # we don't have a remote, just a sync strat
-                sync_strat = remote
-                remote = None
-        except IndexError:
-            # we don't have a remote path
-            remote = None
-        if not sync_strat:
-            try:
-                sync_strat = Path(split_obj[2])
-            except IndexError:
-                sync_strat = "S"
-
-        match sync_strat:
-            case "S":
-                sync_strat = SyncStrategy.STRICT
-            case "A":
-                sync_strat = SyncStrategy.ALLOW_ADDS
-            case "C":
-                sync_strat = SyncStrategy.ENSURE_CREATED
-
-        if local.is_absolute():
-            log.error(f"Local file absolute path not allowed for: {local}... skipping")
-            continue
-
-        # state_directive = RemoteStateDirective(
-        #      local_path=local,
-        #      sync_strategy=sync_strat,
-        #      workdir
-        #      prefix
-        # )
-    #     managed_object = AbstractFsEntry(
-    #         local_path=local,
-    #         fake_root=False,
-    #         remote_prefix=remote,
-    #         sync_strategy=sync_strat,
-    #     )
-
-    #     if not component_name:
-    #         common_objects.append(managed_object)
-    #         continue
-
-    #     component = app.ensure_included(component_name)
-    #     component.state_manager.add_object(managed_object)
-
-    # app.update_common_objects(common_objects)
-
-    # return app
-
-
 @keeper.command()
 def list_apps(
     vault_dir: str = typer.Option(
@@ -215,6 +124,7 @@ def list_apps(
         show_envvar=False,
     )
 ):
+    raise NotImplementedError
 
     if not vault_dir:
         vault_dir = Path().home() / ".vault"
@@ -226,7 +136,7 @@ def list_apps(
 
         with open(app_dir / "config.yaml", "r") as stream:
             ...
-            # pop elements so we don't write jumk
+
         #     config = yaml.safe_load(stream)
         #     for app_name, directives in config.items():
         #         components = directives.pop("components")
@@ -318,7 +228,20 @@ def add_apps_via_loadout_file(
 
 
 @keeper.command()
-def add_app_via_cli(
+def run_single_app(
+    app_name: str = typer.Argument(
+        ...,
+        envvar=f"{PREFIX}_APP_NAME",
+        show_envvar=False,
+        show_default=False,
+    ),
+    components: str = typer.Argument(
+        ...,
+        envvar=f"{PREFIX}_COMPONENTS",
+        show_envvar=False,
+        show_default=False,
+        help="comma seperated list of component names",
+    ),
     comms_port: int = typer.Option(
         8888,
         "--comms-port",
@@ -326,15 +249,8 @@ def add_app_via_cli(
         envvar=f"{PREFIX}_COMMS_PORT",
         show_envvar=False,
     ),
-    app_name: str = typer.Option(
-        None,
-        "--app-name",
-        "-a",
-        envvar=f"{PREFIX}_APP_NAME",
-        show_envvar=False,
-    ),
     vault_dir: str = typer.Option(
-        None,
+        Path().home() / ".vault",
         "--vault-dir",
         "-d",
         envvar=f"{PREFIX}_VAULT_DIR",
@@ -342,19 +258,19 @@ def add_app_via_cli(
     ),
     state_directives: str = typer.Option(
         "",
-        "--state_directives",
-        "-m",
+        "--state-directives",
+        "-s",
         envvar=f"{PREFIX}_STATE_DIRECTIVES",
         show_envvar=False,
         help="""Comma seperated string of state directives.
         
         Update this""",
     ),
-    remote_workdirs: str = typer.Option(
-        None,
-        "--remote-workdirs",
-        "-l",
-        envvar=f"{PREFIX}_REMOTE_WORKDIRS",
+    remote_workdir: str = typer.Option(
+        Path("/tmp"),
+        "--remote-workdir",
+        "-r",
+        envvar=f"{PREFIX}_REMOTE_WORKDIR",
         show_envvar=False,
     ),
     signing_address: str = typer.Option(
@@ -377,10 +293,22 @@ def add_app_via_cli(
         show_envvar=False,
         help="Whether or not to sign outbound connections",
     ),
+    polling_interval: int = typer.Option(
+        300,
+        "--polling-interval",
+        "-i",
+        envvar=f"{PREFIX}_POLLING_INTERVAL",
+        show_envvar=False,
+    ),
+    run_once: bool = typer.Option(
+        False,
+        "--run-once",
+        "-o",
+        envvar=f"{PREFIX}_RUN_ONCE",
+        show_envvar=False,
+        help="Contact agents once and exit",
+    ),
 ):
-
-    if not vault_dir:
-        vault_dir = Path().home() / ".vault"
 
     if sign_connections:
         signing_address = get_signing_key()
@@ -395,20 +323,105 @@ def add_app_via_cli(
     state_directives = state_directives.split(",")
     state_directives = list(filter(None, state_directives))
 
-    apps = []
+    app_config = {}
+    components_config = {}
 
-    # configure single app via command line parameters, Must have state_directives
+    app_config["comms_port"] = comms_port
+    app_config["sign_connections"] = sign_connections
+    app_config["signing_key"] = signing_address
+    app_config["fluxnode_ips"] = agent_ips
+    app_config["groups"] = {"all": {"state_directives": []}}
 
-    # config = build_app_from_cli(
-    #     app_name,
-    #     state_directives,
-    #     signing_address,
-    #     comms_port,
-    #     remote_workdirs,
-    # )
-    # apps.append(config)
+    components = list(filter(None, components.split(",")))
+    for component_str in components:
+        groups = ["all"]
+        component_items = list(filter(None, component_str.split(":")))
+        if len(component_items) > 1:
+            component_name = component_items.pop(0)
+            groups.extend(component_items)
+        else:
+            component_name = component_items[0]
 
-    # WRITE APPS TO DISK
+        components_config[component_name] = {
+            "member_of": groups,
+            "remote_workdir": remote_workdir,
+            "state_directives": [],
+        }
+
+    for obj_str in state_directives:
+        parts = obj_str.split("@")
+
+        component_name = None
+        if len(parts) > 1:
+            component_name = parts[1]
+            obj_str = parts[0]
+
+        split_obj = obj_str.split(":")
+        local = Path(split_obj[0])
+
+        sync_strat = None
+        try:
+            remote = Path(split_obj[1])
+            # this will break on remote paths of S, A, or C"
+            if str(remote) in ["S", "A", "C"]:
+                # we don't have a remote, just a sync strat
+                sync_strat = remote
+                remote = None
+        except IndexError:
+            # we don't have a remote path
+            remote = None
+        if not sync_strat:
+            try:
+                sync_strat = split_obj[2]
+            except IndexError:
+                sync_strat = "S"
+
+        match sync_strat:
+            case "S":
+                sync_strat = SyncStrategy.STRICT
+            case "A":
+                sync_strat = SyncStrategy.ALLOW_ADDS
+            case "C":
+                sync_strat = SyncStrategy.ENSURE_CREATED
+
+        if local.is_absolute():
+            log.error(f"Local file absolute path not allowed for: {local}... skipping")
+            continue
+
+        if not component_name:
+            source = "groups/all" / local
+        else:
+            source = Path("components") / component_name / "staging" / local
+
+        directive = {
+            "content_source": source,
+            "remote_dir": remote,
+            "sync_strategy": sync_strat.name,
+        }
+
+        if not component_name:
+            app_config["groups"]["all"]["state_directives"].append(directive)
+        else:
+            components_config[component_name]["state_directives"].append(directive)
+
+    config = {"app_config": app_config, "components": components_config}
+
+    app = FluxKeeper.build_app(app_name, Path(vault_dir) / app_name, config)
+    flux_keeper = FluxKeeper(
+        # gui=gui,
+        app=app
+    )
+
+    async def main():
+        await flux_keeper.manage_apps(run_once, polling_interval)
+
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(main())
+    except Exception as e:
+        print(f"Error closing down: {e}")
+    finally:
+        flux_keeper.cleanup()
 
 
 @keeper.command()
@@ -439,7 +452,7 @@ def run(
         help="Contact agents once and exit",
     ),
 ):
-    # this takes app name, and any runtime stuff and sparks up app.
+    # this takes app name, and any runtime stuff and sparks up the app.
     # reads config from directives folder based on app.
 
     flux_keeper = FluxKeeper(
@@ -453,7 +466,7 @@ def run(
     try:
         loop.run_until_complete(main())
     except Exception as e:
-        log.error(repr(e))
+        print(f"Error closing: {repr(e)}")
     finally:
         flux_keeper.cleanup()
 

@@ -106,10 +106,11 @@ class FluxComponent:
 
         entries = ConcreteFsEntry.entries_in_dir(staging_dir)
 
+        created_dirs = []
+        created_symlinks = []
+
         for group in self.member_of:
             group_entries = ConcreteFsEntry.entries_in_dir(groups_dir / group)
-            created_dirs = []
-            created_symlinks = []
 
             for path in group_entries:
                 remote_path: Path = self.remote_workdir / path.name
@@ -126,9 +127,6 @@ class FluxComponent:
                             self.remote_workdir / directive.remote_dir / path.name
                         )
 
-                # if no directive, we just chuck them in the default remote path setup at
-                # the start of this loop
-                # we need to clean these up when shut down
                 remote_relative = remote_path.relative_to("/")
                 parent_parts = remote_relative.parent.parts
 
@@ -155,6 +153,7 @@ class FluxComponent:
         for path in entries:
             # default
             remote_path: Path = self.remote_workdir / path.name
+
             directive = self.state_manager.get_directive_by_path(
                 path.relative_to(app_root)
             )
@@ -204,7 +203,6 @@ class FluxComponent:
             )
 
             if not directive:
-                # default, sets sync_state to ensure_Created
                 # add fs_object.name here??
                 directive = RemoteStateDirective(remote_dir=remote_absolute_path.parent)
 

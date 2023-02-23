@@ -5,9 +5,10 @@ from pathlib import Path
 
 import keyring
 
-# import pandas
+import pandas
 import typer
 import yaml
+import sqlite3
 
 from fluxvault import FluxAgent, FluxKeeper
 from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
@@ -16,7 +17,7 @@ from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 from fluxvault.fs import FsEntryStateManager
 
 
-# from tabulate import tabulate
+from tabulate import tabulate
 
 
 PREFIX = "FLUXVAULT"
@@ -24,9 +25,17 @@ PREFIX = "FLUXVAULT"
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
 keeper = typer.Typer(rich_markup_mode="rich", add_completion=False)
 # agent =  typer.Typer(rich_markup_mode="rich", add_completion=False)
+keys = typer.Typer(
+    rich_markup_mode="rich", add_completion=False, help="Private key operations"
+)
+config = typer.Typer(
+    rich_markup_mode="rich", add_completion=False, help="Configure apps"
+)
 
 app.add_typer(keeper, name="keeper")
 # app.add_typer(agent)
+keeper.add_typer(keys, name="keys")
+keeper.add_typer(config, name="config")
 
 from fluxvault.log import log
 
@@ -52,7 +61,7 @@ class colours:
 #         "%(asctime)s: fluxvault: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
 #     )
 
-#     vault_log.setLevel(level)
+#     vault_log.Level(level)
 #     fluxrpc_log.setLevel(level)
 
 #     stream_handler = logging.StreamHandler()
@@ -114,13 +123,22 @@ def get_signing_key(signing_address) -> str:
     return signing_key
 
 
-@keeper.command(help="Dump all addresses for stored private keys")
-def list_signing_key_addresses():
-    ...
+@keys.command(help="Dump all addresses for stored private keys")
+def show_all():
+    root = FluxKeeper.setup()
+    db_dir = root / "db"
+    con = sqlite3.connect(db_dir / "fluxvault.db")
+    cur = con.cursor()
+
+    with con:
+        data = cur.execute("SELECT * FROM STORED_KEYS")
+
+    print()
+    print(tabulate(data, headers="keys", tablefmt="psql"))
 
 
-@keeper.command(help="Add signing key to your devices secure storage")
-def add_signing_key(
+@keys.command(help="Add signing key to your devices secure storage")
+def add(
     signing_address: str = typer.Argument(
         ...,
         envvar=f"{PREFIX}_SIGNING_ADDRESS",
@@ -128,10 +146,19 @@ def add_signing_key(
         help="The address you would like to use for signing messages",
     )
 ):
-    get_signing_key(signing_address)
+    root = FluxKeeper.setup()
+    db_dir = root / "db"
+    if get_signing_key(signing_address):
+        con = sqlite3.connect(db_dir / "fluxvault.db")
+        cur = con.cursor()
+
+        with con:
+            cur.execute(
+                f"INSERT into STORED_KEYS (address) VALUES ('{signing_address}')"
+            )
 
 
-@keeper.command(help="List all apps that are available to run")
+@config.command(help="List all apps that are available to run")
 def list_apps(
     vault_dir: str = typer.Option(
         None,
@@ -141,33 +168,49 @@ def list_apps(
         show_envvar=False,
     )
 ):
-    raise NotImplementedError
 
     if not vault_dir:
-        vault_dir = Path().home() / ".vault"
+        vault_dir: Path = Path().home() / ".vault"
 
-    dfs = []
+    data = []
+
     for app_dir in vault_dir.iterdir():
         if not app_dir.is_dir():
             continue
-
+        app_name = app_dir.name
         with open(app_dir / "config.yaml", "r") as stream:
-            ...
+            config = yaml.safe_load(stream)
+            base = config["app_config"]
+            comms_port = base["comms_port"]
+            ips = base.get("fluxnode_ips", [])
+            sign_connections = base["sign_connections"]
+            component_count = len(config.get("components", []))
+            data.append([app_name, comms_port, ips, sign_connections, component_count])
 
-        #     config = yaml.safe_load(stream)
-        #     for app_name, directives in config.items():
-        #         components = directives.pop("components")
-        #         df = pandas.json_normalize(components)
-        #         print(df)
+    df = pandas.DataFrame(
+        data,
+        columns=[
+            "App Name",
+            "Comms Port",
+            "Fluxnode Ips",
+            "Sign Connections",
+            "Components",
+        ],
+    )
+    print()
+    print(
+        tabulate(
+            df,
+            headers="keys",
+            tablefmt="psql",
+            showindex=False,
+        )
+    )
 
-        # dfs.append(df)
 
-    # table = tabulate(dfs, headers="keys", tablefmt="psql", showindex=False)
-    # typer.echo(table)
-
-
-@keeper.command(
+@config.command(
     help="""Load new apps into config, use `run` method to run them
+
                 Example:
                 
                 apps:
@@ -288,7 +331,7 @@ def add_apps_via_loadout_file(
             )
 
 
-@keeper.command(help="Run command based on CLI parameters only")
+@keeper.command(help="Run app based on CLI parameters only")
 def run_single_app(
     app_name: str = typer.Argument(
         ...,
@@ -718,8 +761,8 @@ def main(
     ...
 
 
-@keeper.command(help="Delete specified private key from keyring")
-def remove_private_key(zelid: str):
+@keys.command(help="Delete specified private key from keyring")
+def remove(zelid: str):
     try:
         keyring.delete_password("fluxvault_app", zelid)
     except keyring.errors.PasswordDeleteError:

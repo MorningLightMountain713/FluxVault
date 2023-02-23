@@ -55,7 +55,7 @@ apps:
   gravyboat:
     # vault_dir: /Users/bob/custom_vaultdir
     remote_workdir: /tmp/gravyboat
-    fluxnode_ips: [172.26.26.126]
+    fluxnode_ips: [172.26.26.151]
     comms_port: 8888
     groups:
       # all components are automatically a member of this group

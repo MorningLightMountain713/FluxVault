@@ -40,12 +40,14 @@ def generate_wallet():
     from fluxwallet.wallets import wallet_create_or_open
 
     mnemonic = Mnemonic().generate()
-    print(f"Mnemonic: {mnemonic}")
+    # print(f"Mnemonic: {mnemonic}")
 
-    w = wallet_create_or_open("Primary", keys=mnemonic, network="flux")
+    # this needs to be interactive or something
+
+    w = wallet_create_or_open("Payments", keys=mnemonic, network="flux")
     key = w.get_key()
 
-    print(f"receive address: {key.address}")
+    # print(f"receive address: {key.address}")
 
 
 def first_run(root: Path):
@@ -70,17 +72,17 @@ def first_run(root: Path):
     # do database stuff
     generate_wallet()
 
-    print(
-        "Opening generic vault directory, if you don't specify a vault dir when you create an app, this is where it will end up by default"
-    )
-    show_in_file_manager(str(generic_vault_dir))
+    # print(
+    #     "Opening generic vault directory, if you don't specify a vault dir when you create an app, this is where it will end up by default"
+    # )
+    # show_in_file_manager(str(generic_vault_dir))
 
 
 def init_wallet():
     from fluxwallet.wallets import wallet_create_or_open
 
     # this will error if wallet doesn't exist
-    w = wallet_create_or_open("Primary", network="flux")
+    payments = wallet_create_or_open("Payments", network="flux")
 
 
 def setup_filesystem_and_wallet() -> Path:

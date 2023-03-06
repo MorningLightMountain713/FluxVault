@@ -100,6 +100,7 @@ class FluxAgentRegistrar:
     def __init__(
         self,
         app_name: str | None = None,
+        working_dir: str = "/tmp",
         bind_address: str = "0.0.0.0",
         bind_port: int = 2080,
         enable_fileserver: bool = False,
@@ -108,6 +109,7 @@ class FluxAgentRegistrar:
         self.bind_port = bind_port
         self.enable_fileserver = enable_fileserver
         self.app_name = app_name
+        self.working_dir = working_dir
         self.sub_agents: list = []
         self.runners: list = []
         self.app = web.Application()

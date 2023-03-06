@@ -119,7 +119,7 @@ class FluxAgent:
 
     def setup_registrar(self):
         if self.enable_registrar and not self.registrar:
-            self.registrar = FluxAgentRegistrar()
+            self.registrar = FluxAgentRegistrar(self.app_name)
 
     def raise_on_state_errors(self):
         """Minimal tests to ensure we are good to run"""

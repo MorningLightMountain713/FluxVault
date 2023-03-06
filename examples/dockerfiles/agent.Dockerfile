@@ -1,4 +1,4 @@
-FROM python:3.9-bullseye
+FROM python:3.10.10-bullseye
 
 RUN pip install fluxvault
 

@@ -99,16 +99,15 @@ class FluxSubAgent:
 class FluxAgentRegistrar:
     def __init__(
         self,
-        app_name: str,
+        app_name: str | None = None,
         bind_address: str = "0.0.0.0",
         bind_port: int = 2080,
         enable_fileserver: bool = False,
     ):
-        self.app_name = app_name
         self.bind_address = bind_address
         self.bind_port = bind_port
         self.enable_fileserver = enable_fileserver
-
+        self.app_name = app_name
         self.sub_agents: list = []
         self.runners: list = []
         self.app = web.Application()

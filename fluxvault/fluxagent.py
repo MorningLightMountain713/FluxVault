@@ -81,6 +81,9 @@ class FluxAgent:
             # Must verify source address as a minimum
             self.verify_source_address = True
 
+        if self.registrar:
+            self.registrar.app_name = self.app_name
+
         self.raise_on_state_errors()
         self.register_extensions()
         self.setup_registrar()

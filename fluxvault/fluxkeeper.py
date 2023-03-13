@@ -677,7 +677,7 @@ class FluxAppManager:
             managed_object.validated_remote_crc = managed_object.remote_crc
 
         log.info(
-            f"Deltas resolved... {len(object_fragments)} object(s) need to be resynced: {object_fragments}"
+            f"Deltas resolved... {len(object_fragments)} object(s) need to be resynced"
         )
 
         if object_fragments:
@@ -734,11 +734,12 @@ class FluxAppManager:
         fixed_objects = []
         for remote_fs_object in remote_fs_objects:
             # this is broken. If we're a dir, any children have already been fixed. Don't
-            # need to resole them to. So need to keep track of the parent.
+            # need to resolve them too. So need to keep track of the parent.
             remote_path = Path(remote_fs_object["name"])
             managed_object = component.state_manager.get_object_by_remote_path(
                 remote_path
             )
+
             if managed_object.local_path in fixed_objects:
                 managed_object.remote_crc = managed_object.local_crc
                 return
@@ -748,6 +749,9 @@ class FluxAppManager:
                 return
 
             managed_object.remote_crc = remote_fs_object["crc32"]
+            # this just crc's the local object, I had this disabled so only validate files
+            # on boot but meh
+            managed_object.validate_local_object()
             managed_object.compare_objects()
 
             if not managed_object.local_object_exists:

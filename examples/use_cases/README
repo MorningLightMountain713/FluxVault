@@ -57,7 +57,7 @@ Note - for the whitelist-addresses, add 2 to the gateway. So if the gatway was 1
 You don't strictly need to expose ports, however I was running Keeper natively on macOS.
 
 ```
-docker run --rm --name fluxagent_demoVault --network http -p 8888:8888 -p 2080:2080 -it megachips/fluxvault:0.8.4 agent --whitelist-addresses 172.18.0.3
+docker run --rm --name fluxagent_demoVault --network http -p 8888:8888 -p 2080:2080 -it megachips/fluxvault:0.8.5 agent --whitelist-addresses 172.18.0.3
 ```
 
 ### 5/ Start Keeper
@@ -71,7 +71,7 @@ You need to volume mount in your fileserver dir that you created earlier. This e
 For this example, our app name is `turnip` This becomes relevant in later use cases.
 
 ```
-docker run --rm --name fluxkeeper_demoVault -v $(pwd)/secrets:/data/fileserver --network http -it megachips/fluxvault:0.8.4 keeper run-single-app turnip --fileserver-dir /data/fileserver --agent-ips 172.18.0.2 --polling-interval 20
+docker run --rm --name fluxkeeper_demoVault -v $(pwd)/secrets:/data/fileserver --network http -it megachips/fluxvault:0.8.5 keeper run-single-app turnip --fileserver-dir /data/fileserver --agent-ips 172.18.0.2 --polling-interval 20
 ```
 
 ### 6/ Start example App
@@ -82,10 +82,42 @@ docker run --rm --name fluxapp_demoVault --network http -p 8080:8080 -it megachi
 
 ### 7/ See the magic
 
-Browse to `http://localhost:8080/file/quotes.txt`
+Browse to `http://localhost:8080`
 
 You should see the quote displayed.
+
+### 8/ Edit quotes.txt
+
+```
+echo "2023 Hi Mom!" >> secrets/quotes.txt
+```
+
+### 9/ See the magic - again
+
+Browse to `http://localhost:8080`
+
+You should see the quote updated.
 
 ### 8/ How does this work?
 
 What happened above? So the keeper transferred the files to the agent. The agent and the app reside in the same private network, so the app queried the agent via it's hostname, then served that up via a simple Python aiohttp webserver.
+
+We then changed the quotes.txt file, which the Keeper detected, and sent the new version to the agent, which it then served up to the app over http.
+
+# Coming soon
+
+### The following is built, just needs tests, docs and use cases written:
+
+Note fluxwallet is still under development and may be broken at any time
+
+* Key management - create, view (addresses), store, delete - uses your devices secure storage area. macOS = keychain, windows = Credential Locker
+* Basic - with authentication (uses bitcoin message signing)
+* Basic - with authentication and agent restart protection (requires signed manifests)
+* Single container apps
+* Multi container apps
+* Sync strategy per file or per directory. (You might want some files to be able to be modified, and some you strictly don't want changed)
+* Multi app configurations, with stored config
+* Proxy agent behind another agent
+* Full SSL with certificates
+* Full remote shell access in browser. Not ssh - custom console
+* Deploy full app to Flux (uses fluxwallet) and manage it all in one

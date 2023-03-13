@@ -695,6 +695,11 @@ class FluxAppManager:
     @manage_transport
     async def load_manifest(self, agent: RPCClient):
         """This is solely for the fileserver"""
+
+        if not agent.transport.auth_provider:
+            log.warn("Agent not using auth, unable to sign manifest... skipping")
+            return
+
         component = self.app.get_component(agent.id[2])
         managed_object = component.state_manager.get_object_by_remote_path(WWW_ROOT)
         fileserver_hash = managed_object.local_crc

@@ -1,32 +1,28 @@
 import asyncio
 import getpass
+import hashlib
 import logging
+import sqlite3
+import traceback
+from enum import Enum
 from pathlib import Path
 from typing import Optional
+
 import keyring
-from enum import Enum
-import traceback
-
-
-import hashlib
-
 import pandas
 import typer
 import yaml
-import sqlite3
-
 from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
 from Cryptodome.Random import get_random_bytes
+from tabulate import tabulate
 
 from fluxvault import FluxAgent, FluxKeeper
-from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
-from fluxvault.helpers import SyncStrategy, AppMode
-from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
-from fluxvault.fs import FsEntryStateManager
-
 from fluxvault.constants import WWW_ROOT
+from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
+from fluxvault.fs import FsEntryStateManager
+from fluxvault.helpers import AppMode, SyncStrategy
+from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 
-from tabulate import tabulate
 
 # typer is stupid about enums so have to make our own here and convert
 class LocalAppMode(str, Enum):

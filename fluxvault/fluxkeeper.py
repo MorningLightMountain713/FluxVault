@@ -44,8 +44,8 @@ from fluxvault.fluxapp import (
 )
 from fluxvault.fluxkeeper_gui import FluxKeeperGui
 from fluxvault.helpers import (
-    FluxVaultKeyError,
     AppMode,
+    FluxVaultKeyError,
     SyncStrategy,
     bytes_to_human,
     manage_transport,

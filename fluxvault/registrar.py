@@ -4,12 +4,12 @@ import asyncio
 import ipaddress
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, streamer, web
 
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log
-from pathlib import Path
 
 
 @dataclass

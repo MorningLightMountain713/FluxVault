@@ -11,14 +11,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-import yaml
-
-from rich.pretty import pprint
 
 import aiofiles
 import aioshutil
+import yaml
 from aiofiles import os as aiofiles_os
 from aiohttp import ClientSession
+from bitcoin.signmessage import BitcoinMessage, VerifyMessage
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -32,14 +31,13 @@ from fluxrpc.auth import SignatureAuthProvider
 from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 from fluxrpc.server import RPCServer
 from fluxrpc.transports.socket.server import EncryptedSocketServerTransport
-from bitcoin.signmessage import VerifyMessage, BitcoinMessage
+from rich.pretty import pprint
 
+from fluxvault.constants import STATE_ROOT, STATE_SIG, STATEFILE, WWW_ROOT
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.helpers import bytes_to_human, get_app_and_component_name, AppMode
+from fluxvault.helpers import AppMode, bytes_to_human, get_app_and_component_name
 from fluxvault.log import log
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
-
-from fluxvault.constants import STATE_ROOT, WWW_ROOT, STATEFILE, STATE_SIG
 
 
 class FluxAgentException(Exception):

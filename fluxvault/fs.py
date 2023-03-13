@@ -418,6 +418,8 @@ class ConcreteFsEntry:
     ### CRC OPERATIONS
 
     def crc_file(self, filename: Path, crc: int) -> int:
+        crc = binascii.crc32(filename.name.encode(), crc)
+
         with open(filename, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 128), b""):
                 crc = binascii.crc32(chunk, crc)

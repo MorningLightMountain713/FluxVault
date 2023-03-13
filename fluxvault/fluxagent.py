@@ -342,6 +342,9 @@ class FluxAgent:
         }
 
     async def crc_file(self, filename: Path, crc: int) -> int:
+        crc = binascii.crc32(filename.name.encode(), crc)
+
+        # should this be chunked like on the Keeper? Or remove chunk?
         try:
             async with aiofiles.open(filename, "rb") as f:
                 data = await f.read()

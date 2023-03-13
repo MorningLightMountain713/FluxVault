@@ -575,9 +575,12 @@ class FluxAppManager:
             object_fragments = [managed_object.concrete_fs.path]
             size = managed_object.concrete_fs.size
 
-        log.info(
-            f"Sending {bytes_to_human(size)} across {len(object_fragments)} object(s)"
-        )
+        # this logging is wrong. It implies that each object is the size which isn't correct
+        # It's the aggregate size of all children if it's a dir and the size if it's a file
+        #
+        # log.info(
+        #     f"Sending {bytes_to_human(size)} across {len(object_fragments)} object(s)"
+        # )
 
         if size < MAX_INBAND_FILESIZE:
             inband = True

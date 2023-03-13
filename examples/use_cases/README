@@ -57,7 +57,7 @@ Note - for the whitelist-addresses, add 2 to the gateway. So if the gatway was 1
 You don't strictly need to expose ports, however I was running Keeper natively on macOS.
 
 ```
-docker run --rm --name fluxagent_demoVault --network http -p 8888:8888 -p 2080:2080 -it megachips/fluxvault:0.8.1 agent --whitelist-addresses 172.18.0.3
+docker run --rm --name fluxagent_demoVault --network http -p 8888:8888 -p 2080:2080 -it megachips/fluxvault:0.8.3 agent --whitelist-addresses 172.18.0.3
 ```
 
 ### 5/ Start Keeper
@@ -71,7 +71,7 @@ You need to volume mount in your fileserver dir that you created earlier. This e
 For this example, our app name is `turnip` This becomes relevant in later use cases.
 
 ```
-docker run --rm --name fluxkeeper_demoVault -v $(pwd)/secrets:/data/fileserver --network http -it megachips/fluxvault:0.8.1 keeper run-single-app turnip --fileserver-dir /data/fileserver --agent-ips 172.18.0.2 --polling-interval 20
+docker run --rm --name fluxkeeper_demoVault -v $(pwd)/secrets:/data/fileserver --network http -it megachips/fluxvault:0.8.3 keeper run-single-app turnip --fileserver-dir /data/fileserver --agent-ips 172.18.0.2 --polling-interval 20
 ```
 
 ### 6/ Start example App

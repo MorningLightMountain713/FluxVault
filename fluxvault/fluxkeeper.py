@@ -477,10 +477,7 @@ class FluxAppManager:
         extras = []
 
         fake_root = managed_object.root()
-        # just make this a property
-        # if app_mode == AppMode.FILESERVER:
-        #     root_path = managed_object.remote_workdir
-        # else:
+
         root_path = "/"
         for remote_name in remote_hashes:
             remote_name = Path(remote_name)
@@ -542,11 +539,11 @@ class FluxAppManager:
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
     ) -> tuple[list[Path], list[Path]]:
-        print("before")
+
         candidates, missing, modified = self.get_missing_or_modified_objects(
             self.app.app_mode, managed_object, local_hashes, remote_hashes
         )
-        print("after get missing")
+
         extra_objects, unknown = self.get_extra_objects(
             self.app.app_mode, managed_object, local_hashes, remote_hashes
         )
@@ -657,13 +654,10 @@ class FluxAppManager:
             name=managed_object.name
         )
 
-        print("about to resolve deltas")
         # these are in remote absolute form
         object_fragments, objects_to_remove = self.resolve_object_deltas(
             managed_object, local_hashes, remote_hashes
         )
-
-        print("have resolved deltas")
 
         if (
             managed_object.remit.sync_strategy == SyncStrategy.STRICT
@@ -783,11 +777,9 @@ class FluxAppManager:
 
             if not managed_object.in_sync and managed_object.concrete_fs.storable:
                 # so here we need to figure any children dirs and set them manually to in_sync
-                print("Resolving dir state")
                 fixed = await self.resolve_directory_state(
                     component, managed_object, agent_proxy
                 )
-                print("dir state resolved")
                 fixed_objects.extend(fixed)
 
             if not managed_object.in_sync and not managed_object.concrete_fs.storable:

@@ -11,6 +11,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import yaml
+
+from rich.pretty import pprint
 
 import aiofiles
 import aioshutil
@@ -29,11 +32,14 @@ from fluxrpc.auth import SignatureAuthProvider
 from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 from fluxrpc.server import RPCServer
 from fluxrpc.transports.socket.server import EncryptedSocketServerTransport
+from bitcoin.signmessage import VerifyMessage, BitcoinMessage
 
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.helpers import bytes_to_human, get_app_and_component_name
+from fluxvault.helpers import bytes_to_human, get_app_and_component_name, AppMode
 from fluxvault.log import log
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
+
+from fluxvault.constants import STATE_ROOT, WWW_ROOT, STATEFILE, STATE_SIG
 
 
 class FluxAgentException(Exception):
@@ -54,7 +60,7 @@ class FluxAgent:
         whitelisted_addresses: list = ["127.0.0.1"],
         verify_source_address: bool = False,
         signed_vault_connections: bool = False,
-        zelid: str = "",
+        auth_id: str = "",
         subordinate: bool = False,
         primary_agent: FluxPrimaryAgent | None = None,
     ):
@@ -62,7 +68,7 @@ class FluxAgent:
         self.enable_registrar = enable_registrar
         self.extensions = extensions
         self.loop = asyncio.get_event_loop()
-        self.zelid = zelid
+        self.auth_id = auth_id
         # self.working_dir = working_dir
         self.subordinate = subordinate
         self.registrar = registrar
@@ -74,6 +80,7 @@ class FluxAgent:
         self.primary_agent = primary_agent
         self.component_name, self.app_name = get_app_and_component_name()
         self.file_handles: dict = {}
+        self.app_mode = AppMode.UNKNOWN
 
         log.info(f"Component name: {self.component_name}, App name: {self.app_name}")
 
@@ -81,15 +88,14 @@ class FluxAgent:
             # Must verify source address as a minimum
             self.verify_source_address = True
 
-        if self.registrar:
-            self.registrar.app_name = self.app_name
-
+        self.setup_registrar()
+        self.auth_provider = self.loop.run_until_complete(self.get_auth_provider())
+        self.loop.run_until_complete(self.validate_prior_state())
         self.raise_on_state_errors()
         self.register_extensions()
-        self.setup_registrar()
+
         self.loop.run_until_complete(self.setup_sub_agent())
 
-        self.auth_provider = self.loop.run_until_complete(self.get_auth_provider())
         transport = EncryptedSocketServerTransport(
             bind_address,
             bind_port,
@@ -120,9 +126,79 @@ class FluxAgent:
             )
             await self.sub_agent.register_with_primary_agent()
 
+    def set_mode(self, mode: int):
+        mode = AppMode(mode)
+        match mode:
+            case AppMode.FILESERVER:
+                WWW_ROOT.mkdir(parents=True, exist_ok=True)
+                self.registrar.enable_services()
+
+    async def load_manifest(self, remote_fileserver_hash, sig):
+        local_fileserver_hash = await self.crc_directory(WWW_ROOT, 0)
+        if local_fileserver_hash != remote_fileserver_hash:
+            log.error(
+                f"local hash: {local_fileserver_hash} does not match remote: {remote_fileserver_hash}"
+            )
+            return
+
+        with open(STATE_SIG, "wb") as stream:
+            stream.write(sig)
+
+    async def validate_prior_state(self):
+        raw_state = None
+
+        if not self.auth_provider:
+            # we can only validate prior state if we have an auth provider
+            log.warn(
+                "No auth provider set so unable to validate prior state... waiting for Keeper to connect"
+            )
+            return
+
+        if not WWW_ROOT.exists():
+            log.warn(
+                f"Fileserver root {WWW_ROOT} does not exist... waiting for Keeper to connect"
+            )
+            return
+
+        # if this file exists, means we're fileserver???
+        if STATE_SIG.exists():
+            with open(STATE_SIG, "rb") as stream:
+                sig = stream.read()
+        else:
+            return
+
+        current_vault_dir_hash = await self.crc_directory(WWW_ROOT, 0)
+        msg = BitcoinMessage(str(current_vault_dir_hash))
+
+        if VerifyMessage(self.auth_provider.address, msg, sig):
+            log.info("Manifest validated... enabling fileserver endpoint")
+            # shouldn't need try except here as we've validated
+            # state = yaml.safe_load(raw_state)
+            self.app_mode = AppMode.FILESERVER
+            self.registrar.enable_services()
+        else:
+            log.error(
+                "Manifest is different than signature... waiting for keeper to connect"
+            )
+
     def setup_registrar(self):
-        if self.enable_registrar and not self.registrar:
-            self.registrar = FluxAgentRegistrar(self.app_name)
+        # At this point, the keeper hasn't made contact. However,
+        # we may have just rebooted or something. If we still have the signature,
+        # and a valid manifest - we can start serving without the keeper having made
+        # contact
+        enable_fileserver = False
+        if self.registrar:
+            self.registrar.app_name = self.app_name
+
+        if not self.registrar:
+            if self.app_mode == AppMode.FILESERVER:
+                enable_fileserver = True
+            self.registrar = FluxAgentRegistrar(
+                self.app_name, enable_fileserver=enable_fileserver
+            )
+        # # this only happens if we've validated manifest
+        # if self.app_mode == AppMode.FILESERVER:
+        #     self.registrar.ready_to_serve
 
     def raise_on_state_errors(self):
         """Minimal tests to ensure we are good to run"""
@@ -155,26 +231,25 @@ class FluxAgent:
         self.extensions.add_method(self.disconnect_shell)
         self.extensions.add_method(self.get_state)
         self.extensions.add_method(self.get_directory_hashes)
+        self.extensions.add_method(self.set_mode)
+        self.extensions.add_method(self.load_manifest)
+        # self.extensions.add_method(self.enable_registrar_fileserver)
         # self.extensions.add_method(self.run_entrypoint)
 
     async def get_auth_provider(self):
         auth_provider = None
         if self.signed_vault_connections:
             # this is solely for testing without an app (outside of a Fluxnode)
-            if self.zelid:
-                address = self.zelid
+            if self.auth_id:
+                address = self.auth_id
             else:
                 address = await self.get_app_owner_zelid(self.app_name)
-            log.info(f"App zelid is: {address}")
+            log.info(f"App AuthID is: {address}")
             auth_provider = SignatureAuthProvider(address=address)
         return auth_provider
 
     def run(self):
-        if self.enable_registrar:
-            self.loop.create_task(self.registrar.start_app())
-            log.info(
-                f"Sub agent http server running on port {self.registrar.bind_port}"
-            )
+        self.loop.create_task(self.registrar.start_app())
 
         task = self.loop.create_task(self.rpc_server.serve_forever())
 
@@ -255,7 +330,7 @@ class FluxAgent:
             "component_name": self.component_name,
             "app_name": self.app_name,
             "enable_registrar": self.enable_registrar,
-            "zelid": self.zelid,
+            "auth_id": self.auth_id,
             # "working_dir": self.working_dir,
             "subordinate": self.subordinate,
             "signed_vault_connections": self.signed_vault_connections,
@@ -309,7 +384,6 @@ class FluxAgent:
     async def get_all_object_hashes(self, objects: list) -> list:
         """Returns the crc32 for each object that is being managed"""
         log.info(f"Returning crc's for {len(objects)} object(s)")
-
         tasks = []
         for obj in objects:
             tasks.append(self.loop.create_task(self.get_object_crc(obj)))
@@ -453,6 +527,10 @@ class FluxAgent:
             "plugins": self.extensions.list_plugins(),
             "registrar_enabled": self.enable_registrar,
         }
+
+    def enable_registrar_fileserver(self):
+        if self.registrar:
+            self.registrar.ready_to_serve = True
 
     async def load_plugins(self, directory: str):
         p = Path(directory)

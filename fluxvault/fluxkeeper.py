@@ -32,6 +32,7 @@ from rich.pretty import pprint
 
 # this package
 from fluxvault.app_init import setup_filesystem_and_wallet
+from fluxvault.constants import WWW_ROOT
 from fluxvault.extensions import FluxVaultExtensions
 from fluxvault.fluxapp import (
     FluxApp,
@@ -44,6 +45,7 @@ from fluxvault.fluxapp import (
 from fluxvault.fluxkeeper_gui import FluxKeeperGui
 from fluxvault.helpers import (
     FluxVaultKeyError,
+    AppMode,
     SyncStrategy,
     bytes_to_human,
     manage_transport,
@@ -74,7 +76,7 @@ class FluxKeeper:
     of that data is restricted to the application owner
     """
 
-    # GUI hidden via cli, no where near ready
+    # GUI hidden via cli, no where near ready, look at just breaking out console first
     def __init__(
         self,
         vault_dir: str | None = None,
@@ -95,6 +97,7 @@ class FluxKeeper:
         # Allow one app to be passed in, otherwise - look up config
         if app and isinstance(app, FluxApp):
             self.apps.append(app)
+
         else:
             for app_dir in self.vault_dir.iterdir():
                 if not app_dir.is_dir():
@@ -131,6 +134,7 @@ class FluxKeeper:
         return setup_filesystem_and_wallet()
 
     def qualify_vault_dir(self, dir: str):
+        """Sets the vault_dir attr"""
         if not dir:
             vault_dir = Path().home() / ".vault"
         else:
@@ -214,6 +218,9 @@ class FluxKeeper:
             if not Path(remote_workdir).is_absolute():
                 raise ValueError(f"Remote workdir {remote_workdir} is not absolute")
 
+            # if app.app_mode == AppMode.FILESERVER:
+            #     local_workdir = app_dir
+            # else:
             local_workdir = app_dir / "components" / component_name
 
             # this is if the content source doesn't exist... we try here
@@ -273,8 +280,11 @@ class FluxKeeper:
 
     def configure_apps(self):
         for app in self.apps:
-            app.build_catalogue()  # from fake_root
-            app.validate_local_objects()  # all objects
+            # if app.app_mode == AppMode.FILESERVER:
+            #     app.build_fs()
+            # else:
+            app.build_catalogue()
+            app.validate_local_objects()
             flux_app = FluxAppManager(self, app)
             self.managed_apps.append(flux_app)
 
@@ -287,13 +297,12 @@ class FluxKeeper:
             app.remove_catalogue()
 
     async def manage_apps(self, run_once: bool, polling_interval: int):
-        # add a try finally here to clean up symlinks in fake_root
-        # this is broken. They need tobe run as tasks.
         tasks = []
 
         async def manage(app_manager: FluxAppManager):
             while True:
                 await app_manager.run_agent_tasks()
+
                 if run_once:
                     break
                 log.info(
@@ -459,6 +468,7 @@ class FluxAppManager:
 
     @staticmethod
     def get_extra_objects(
+        app_mode: AppMode,
         managed_object: FsEntryStateManager,
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
@@ -467,13 +477,18 @@ class FluxAppManager:
         extras = []
 
         fake_root = managed_object.root()
+        # just make this a property
+        # if app_mode == AppMode.FILESERVER:
+        #     root_path = managed_object.remote_workdir
+        # else:
+        root_path = "/"
         for remote_name in remote_hashes:
             remote_name = Path(remote_name)
 
-            target = str(fake_root / remote_name.relative_to("/"))
-            local_name = local_hashes.get(target, None)
+            target = str(fake_root / remote_name.relative_to(root_path))
+            exists = local_hashes.get(target, None)
 
-            if local_name is None:
+            if exists == None:
                 count += 1
                 if not extras:
                     extras.append(remote_name)
@@ -484,6 +499,7 @@ class FluxAppManager:
 
     @staticmethod
     def get_missing_or_modified_objects(
+        app_mode: AppMode,
         managed_object: FsEntryStateManager,
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
@@ -497,10 +513,15 @@ class FluxAppManager:
         candidates: list[Path] = []
         fake_root = managed_object.root()
 
+        # if app_mode == AppMode.FILESERVER:
+        #     remote_root = managed_object.remote_workdir
+        # else:
+        remote_root = "/"
+
         for local_path, local_crc in local_hashes.items():
             local_path = Path(local_path)
 
-            remote_absolute = "/" / local_path.relative_to(fake_root)
+            remote_absolute = remote_root / local_path.relative_to(fake_root)
 
             # this should always be found, we asked for the hash.
             remote_crc = remote_hashes.get(str(remote_absolute), None)
@@ -521,17 +542,19 @@ class FluxAppManager:
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
     ) -> tuple[list[Path], list[Path]]:
+        print("before")
         candidates, missing, modified = self.get_missing_or_modified_objects(
-            managed_object, local_hashes, remote_hashes
+            self.app.app_mode, managed_object, local_hashes, remote_hashes
         )
-
+        print("after get missing")
         extra_objects, unknown = self.get_extra_objects(
-            managed_object, local_hashes, remote_hashes
+            self.app.app_mode, managed_object, local_hashes, remote_hashes
         )
 
         log.info(
-            f"{missing} missing object(s), {modified} modified object(s) and {unknown} extra object(s)... fixing"
+            f"{missing} missing object(s), {modified} modified object(s) and {unknown} extra object(s)"
         )
+
         return (candidates, extra_objects)
 
     async def sync_remote_object(
@@ -548,6 +571,7 @@ class FluxAppManager:
         # whole fragment thing is weird
         if object_fragments:
             remote_dir = managed_object.absolute_remote_path
+            # think this is broken
             size = managed_object.concrete_fs.get_partial_size(object_fragments)
         else:
             remote_dir = managed_object.absolute_remote_dir
@@ -565,7 +589,19 @@ class FluxAppManager:
             # this is dumb, but I'm tired. Ideally shouldn't be creating parent dirs
             # for files on remote end - they should get created explictily
 
-            abs_remote_path = str(remote_dir / fs_entry.name)
+            # this is true except for root dir, it's "fake root"
+            # if syncing_root:
+            #     # need to fake this
+            #     abs_remote_path = str(remote_dir / managed_object.name)
+            # else:
+            #     print("RELATIVE", fs_entry, managed_object.local_path)
+            if fs_entry != managed_object.local_parent / managed_object.name:
+                relative = fs_entry.relative_to(
+                    managed_object.local_parent / managed_object.name
+                )
+                abs_remote_path = str(remote_dir / relative)
+            else:
+                abs_remote_path = str(remote_dir / fs_entry.name)
 
             if fs_entry.is_dir():
                 # Only need to do for empty dirs but currently doing on all dirs (wasteful as they will get created anyways)
@@ -605,23 +641,29 @@ class FluxAppManager:
         component: FluxComponent,
         managed_object: FsEntryStateManager,
         agent_proxy: RPCProxy,
-    ) -> dict:
+    ) -> list:
         remote_path = str(managed_object.absolute_remote_path)
 
         # if it doesn't exist - no point getting child hashes
         if managed_object.remote_crc == 0:
             await self.sync_remote_object(agent_proxy, managed_object)
-            return
+            return []
 
         # this is different from the global get_all_object_hashes - this adds
         # all the hashes together, get_directory_hashes keeps them seperate
         remote_hashes = await agent_proxy.get_directory_hashes(remote_path)
         # these are absolute
-        local_hashes = managed_object.concrete_fs.get_directory_hashes()
+        local_hashes = managed_object.concrete_fs.get_directory_hashes(
+            name=managed_object.name
+        )
+
+        print("about to resolve deltas")
         # these are in remote absolute form
         object_fragments, objects_to_remove = self.resolve_object_deltas(
             managed_object, local_hashes, remote_hashes
         )
+
+        print("have resolved deltas")
 
         if (
             managed_object.remit.sync_strategy == SyncStrategy.STRICT
@@ -648,6 +690,20 @@ class FluxAppManager:
         managed_object.in_sync = True
         managed_object.remote_object_exists = True
 
+        return object_fragments
+
+    @manage_transport
+    async def load_manifest(self, agent: RPCClient):
+        """This is solely for the fileserver"""
+        component = self.app.get_component(agent.id[2])
+        managed_object = component.state_manager.get_object_by_remote_path(WWW_ROOT)
+        fileserver_hash = managed_object.local_crc
+        # this only works if we're signing messages
+        sig = agent.transport.auth_provider.sign_message(str(fileserver_hash))
+        # manifest = managed_object.concrete_fs.decendants()
+        agent_proxy = agent.get_proxy()
+        await agent_proxy.load_manifest(fileserver_hash, sig)
+
     @manage_transport
     async def sync_objects(self, agent: RPCClient):
         log.debug(f"Contacting Agent {agent.id} to check if files required")
@@ -673,11 +729,17 @@ class FluxAppManager:
             log.warn(f"No objects to sync for {agent.id} specified... skipping!")
             return
 
+        fixed_objects = []
         for remote_fs_object in remote_fs_objects:
+            # this is broken. If we're a dir, any children have already been fixed. Don't
+            # need to resole them to. So need to keep track of the parent.
             remote_path = Path(remote_fs_object["name"])
             managed_object = component.state_manager.get_object_by_remote_path(
                 remote_path
             )
+            if managed_object.local_path in fixed_objects:
+                managed_object.remote_crc = managed_object.local_crc
+                return
 
             if not managed_object:
                 log.warn(f"managed object: {remote_path} not found in component config")
@@ -715,9 +777,13 @@ class FluxAppManager:
                 continue
 
             if not managed_object.in_sync and managed_object.concrete_fs.storable:
-                await self.resolve_directory_state(
+                # so here we need to figure any children dirs and set them manually to in_sync
+                print("Resolving dir state")
+                fixed = await self.resolve_directory_state(
                     component, managed_object, agent_proxy
                 )
+                print("dir state resolved")
+                fixed_objects.extend(fixed)
 
             if not managed_object.in_sync and not managed_object.concrete_fs.storable:
                 await self.resolve_file_state(managed_object, agent_proxy)
@@ -751,14 +817,22 @@ class FluxAppManager:
         await proxy.install_cert(cert.cert_bytes)
         await proxy.install_ca_cert(self.keeper.ca.cert_bytes)
 
-        # proxy.one_way = True
         proxy.notify()
         await proxy.upgrade_to_ssl()
-        # proxy.one_way = False
 
         # ToDo: function (don't mutate child properties)
         agent.transport.proxy_ssl = True
         agent.transport.proxy_port += 1
+
+    @manage_transport
+    async def set_mode(self, agent: RPCClient):
+        agent_proxy = agent.get_proxy()
+        resp = await agent_proxy.set_mode(self.app.app_mode.value)
+
+    # @manage_transport
+    # async def enable_fileserver(self, agent: RPCClient):
+    #     agent_proxy = agent.get_proxy()
+    #     resp = await agent_proxy.enable_registrar_fileserver()
 
     @manage_transport
     async def enroll_subordinates(self, agent: RPCClient):
@@ -814,10 +888,15 @@ class FluxAppManager:
         # ToDo: add cli `tasks` thingee
         if not tasks:
             tasks = [
-                self.enroll_subordinates,
                 self.sync_objects,
+                self.set_mode,
                 self.get_state,
             ]
+        if self.app.app_mode != AppMode.FILESERVER:
+            tasks.insert(0, self.enroll_subordinates)
+
+        if self.app.app_mode == AppMode.FILESERVER:
+            tasks.insert(2, self.load_manifest)
 
         for index, func in enumerate(tasks):
             log.info(f"Running task: {func.__name__}")

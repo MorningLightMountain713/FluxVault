@@ -9,6 +9,7 @@ from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, streamer
 
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log
+from pathlib import Path
 
 
 @dataclass
@@ -104,21 +105,27 @@ class FluxAgentRegistrar:
         bind_address: str = "0.0.0.0",
         bind_port: int = 2080,
         enable_fileserver: bool = False,
+        # enable_registrar: bool = False,
     ):
         self.bind_address = bind_address
         self.bind_port = bind_port
         self.enable_fileserver = enable_fileserver
+        # self.enable_registrar = enable_registrar
         self.app_name = app_name
         self.working_dir = working_dir
         self.sub_agents: list = []
         self.runners: list = []
         self.app = web.Application()
-        self.log = log
         self._ready_to_serve = False
 
     @property
     def ready_to_serve(self):
+        # this gets set via the keeper
         return self._ready_to_serve
+
+    @ready_to_serve.setter
+    def read_to_serve(self, value: bool):
+        self._ready_to_serve = value
 
     @streamer
     async def file_sender(writer, file_path=None):
@@ -132,19 +139,30 @@ class FluxAgentRegistrar:
                 await writer.write(chunk)
                 chunk = f.read(2**16)
 
+    def enable_services(self):
+        self.read_to_serve = True
+        # if registrar:
+        #     self.enable_registrar = registrar
+        #     log.info(f"Sub agent http server running on port {self.bind_port}")
+
+        # if fileserver:
+        #     self.enable_fileserver = fileserver
+        #     log.info(f"Enabling LAN fileserver on port {self.bind_port}")
+
     async def start_app(self):
         runner = web.AppRunner(self.app)
+        # if self.enable_fileserver:
+        #     self.enable_services()
+
         self.app.router.add_post("/register", self.handle_register)
         self.app.router.add_post("/update", self.handle_update)
-
-        if self.enable_fileserver:
-            self.app.router.add_get("/file/{file_name}", self.download_file)
+        self.app.router.add_get("/file/{file_name:.*}", self.download_file)
 
         self.runners.append(runner)
         await runner.setup()
         site = web.TCPSite(runner, self.bind_address, self.bind_port)
+        log.info(f"Starting http server on port {self.bind_port}")
         await site.start()
-        self._ready_to_serve = True
 
     async def download_file(self, request: web.Request) -> web.Response:
         # ToDo: Base downloads on component name
@@ -152,6 +170,7 @@ class FluxAgentRegistrar:
 
         # We only accept connections from local network. (Protect against punter
         # exposing the fileserver port on the internet)
+
         if not ipaddress.ip_address(request.remote).is_private:
             return web.Response(
                 body="Unauthorized",
@@ -169,14 +188,18 @@ class FluxAgentRegistrar:
                 status=503,
             )
 
-        file_name = request.match_info["file_name"]
-        headers = {"Content-disposition": f"attachment; filename={file_name}"}
+        file_path = Path(request.match_info["file_name"])
+        # RESOLVE, check that length is longer than working dir
+        if file_path.is_absolute():
+            return web.Response(body="Invalid Path", status=403)
 
-        file_path = os.path.join(self.working_dir, file_name)
+        headers = {"Content-disposition": f"attachment; filename={file_path.name}"}
 
-        if not os.path.exists(file_path):
+        file_path = self.working_dir / file_path
+
+        if not file_path.exists():
             return web.Response(
-                body=f"File <{file_name}> does not exist",
+                body=f"File <{file_path.name}> does not exist",
                 status=404,
             )
 

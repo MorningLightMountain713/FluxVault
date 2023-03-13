@@ -1,0 +1,28 @@
+# Use Cases
+
+## Basic - Authentication based on source IP address
+
+```
+           Flux Application                   Pros
+          ┌─────┬─┬────────┐                    * Easy to get running
+          │     │┼│    ◄───┼──────Keeper        * Simple to get files to components
+Agent Component └┼┘        │                    * Drop in component
+          │      │http     │
+          │      ▼         │                  Cons
+          │  ┌─┐  ┌─┐      │                    * Insecure
+          │  │┼│  │┼│      │                    * Requires components to determine when they have files
+          └──┴─┴──┴─┴──────┘                    * Little control over file / directory state
+          App Components
+```
+
+### Audience
+
+This use case is suited to Fluxers who want a simple way of getting a password or two into a container, and don't care about state.
+
+A shim script can be setup on the app components to fetch the files before starting the entrypoint. See example below.
+
+### Usage
+
+## Agent
+
+Use container megachips/fluxvault:0.8.0

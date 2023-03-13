@@ -4,7 +4,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from showinfm import show_in_file_manager
+# from showinfm import show_in_file_manager
 
 
 def app_dir():

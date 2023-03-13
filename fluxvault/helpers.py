@@ -87,6 +87,13 @@ class SyncStrategy(Enum):
     ENSURE_CREATED = 3
 
 
+class AppMode(Enum):
+    FILESERVER = 1
+    SINGLE_COMPONENT = 2
+    MULTI_COMPONENT = 3
+    UNKNOWN = 4
+
+
 def bytes_to_human(num, suffix="B"):
     for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
         if abs(num) < 1024.0:

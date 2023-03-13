@@ -2,22 +2,37 @@ import asyncio
 import getpass
 import logging
 from pathlib import Path
-
+from typing import Optional
 import keyring
+from enum import Enum
+import traceback
+
+
+import hashlib
 
 import pandas
 import typer
 import yaml
 import sqlite3
 
+from bitcoin.wallet import CBitcoinSecret, P2PKHBitcoinAddress
+from Cryptodome.Random import get_random_bytes
+
 from fluxvault import FluxAgent, FluxKeeper
 from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
-from fluxvault.helpers import SyncStrategy
+from fluxvault.helpers import SyncStrategy, AppMode
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 from fluxvault.fs import FsEntryStateManager
 
+from fluxvault.constants import WWW_ROOT
 
 from tabulate import tabulate
+
+# typer is stupid about enums so have to make our own here and convert
+class LocalAppMode(str, Enum):
+    FILESERVER = "FILESERVER"
+    SINGLE_COMPONENT = "SINGLE_COMPONENT"
+    MULTI_COMPONENT = "MULTI_COMPONENT"
 
 
 PREFIX = "FLUXVAULT"
@@ -107,8 +122,11 @@ def yes_or_no(question, default="yes"):
             print("Please respond with 'yes' or 'no' " "(or 'y' or 'n').\n")
 
 
-def get_signing_key(signing_address) -> str:
-    signing_key = keyring.get_password("fluxvault_app", signing_address)
+def fetch_and_store_signing_key(signing_address: str, signing_key: str = "") -> str:
+    store_key = True
+
+    if not signing_key:
+        signing_key = keyring.get_password("fluxvault_app", signing_address)
 
     if not signing_key:
         signing_key = getpass.getpass(
@@ -117,8 +135,10 @@ def get_signing_key(signing_address) -> str:
         store_key = yes_or_no(
             "Would you like to store your private key in your device's secure store?\n\n(macOS: keyring, Windows: Windows Credential Locker, Ubuntu: GNOME keyring.\n\n This means you won't need to enter your private key every time this program is run.",
         )
-        if store_key:
-            keyring.set_password("fluxvault_app", signing_address, signing_key)
+    if store_key:
+        print(type(signing_address))
+        print(type(signing_key))
+        keyring.set_password("fluxvault_app", signing_address, signing_key)
 
     return signing_key
 
@@ -137,6 +157,24 @@ def show_all():
     print(tabulate(data, headers="keys", tablefmt="psql"))
 
 
+@keys.command(help="Create a new signing key")
+def create():
+    h = hashlib.sha256(get_random_bytes(64)).digest()
+    seckey = CBitcoinSecret.from_secret_bytes(h)
+    address = P2PKHBitcoinAddress.from_pubkey(seckey.pub)
+
+    root = FluxKeeper.setup()
+    db_dir = root / "db"
+
+    if fetch_and_store_signing_key(str(address), str(seckey)):
+        con = sqlite3.connect(db_dir / "fluxvault.db")
+        cur = con.cursor()
+
+        with con:
+            cur.execute(f"INSERT into STORED_KEYS (address) VALUES ('{address}')")
+        print(f"Private key stored. Address to use on Agent: {address}")
+
+
 @keys.command(help="Add signing key to your devices secure storage")
 def add(
     signing_address: str = typer.Argument(
@@ -148,7 +186,7 @@ def add(
 ):
     root = FluxKeeper.setup()
     db_dir = root / "db"
-    if get_signing_key(signing_address):
+    if fetch_and_store_signing_key(signing_address):
         con = sqlite3.connect(db_dir / "fluxvault.db")
         cur = con.cursor()
 
@@ -212,7 +250,7 @@ def list_apps(
     help="""Load new apps into config, use `run` method to run them
 
                 Example:
-                
+
                 apps:
                     gravyboat:
                         # vault_dir: /Users/bob/custom_vaultdir
@@ -247,7 +285,7 @@ def list_apps(
                             - content_source: blah.txt
                                 # this file gets crc checked and replaced if different
                                 sync_strategy: STRICT
-                                # if content_source isn't used, fluxvault will look in the component staging_dir to see if an 
+                                # if content_source isn't used, fluxvault will look in the component staging_dir to see if an
                                 # objects name matches. This could potentially be problematic, if it doubt, use content_source. Name / remote dir
                                 # is more for if you put your objects directly in fake_root.
                             - name: salami
@@ -339,12 +377,28 @@ def run_single_app(
         show_envvar=False,
         show_default=False,
     ),
-    components: str = typer.Argument(
-        ...,
+    components: Optional[str] = typer.Argument(
+        None,
         envvar=f"{PREFIX}_COMPONENTS",
         show_envvar=False,
         show_default=False,
         help="comma seperated list of component names",
+    ),
+    app_mode: LocalAppMode = typer.Option(
+        LocalAppMode.FILESERVER,
+        "-m",
+        "--app-mode",
+        envvar=f"{PREFIX}_APP_NAME",
+        show_envvar=False,
+        show_default=False,
+    ),
+    fileserver_dir: Path = typer.Option(
+        Path().resolve(),
+        "-f",
+        "--fileserver-dir",
+        envvar=f"{PREFIX})_FILESERVER_DIR",
+        show_envvar=False,
+        show_default=False,
     ),
     comms_port: int = typer.Option(
         8888,
@@ -381,26 +435,26 @@ def run_single_app(
         envvar=f"{PREFIX}_REMOTE_WORKDIR",
         show_envvar=False,
     ),
-    signing_address: str = typer.Option(
-        "",
-        envvar=f"{PREFIX}_SIGNING_ADDRESS",
-        show_envvar=False,
-        help="This is used to associate private key in keychain",
-    ),
+    # signing_address: str = typer.Option(
+    #     "",
+    #     envvar=f"{PREFIX}_SIGNING_ADDRESS",
+    #     show_envvar=False,
+    #     help="This is used to associate private key in keychain",
+    # ),
     agent_ips: str = typer.Option(
         "",
         envvar=f"{PREFIX}_AGENT_IPS",
         show_envvar=False,
         help="If your not using app name to determine ips",
     ),
-    sign_connections: bool = typer.Option(
-        False,
-        "--sign-connections",
-        "-q",
-        envvar=f"{PREFIX}_SIGN_CONNECTIONS",
-        show_envvar=False,
-        help="Whether or not to sign outbound connections",
-    ),
+    # sign_connections: bool = typer.Option(
+    #     False,
+    #     "--sign-connections",
+    #     "-q",
+    #     envvar=f"{PREFIX}_SIGN_CONNECTIONS",
+    #     show_envvar=False,
+    #     help="Whether or not to sign outbound connections",
+    # ),
     polling_interval: int = typer.Option(
         300,
         "--polling-interval",
@@ -418,12 +472,17 @@ def run_single_app(
     ),
 ):
 
-    if sign_connections:
-        signing_address = get_signing_key()
-        if not signing_address:
-            raise ValueError(
-                "signing_address must be provided if signing connections (keyring)"
-            )
+    if not components and app_mode != LocalAppMode.FILESERVER:
+        raise ValueError(
+            "You must specify components if not running in Fileserver mode"
+        )
+
+    # if sign_connections:
+    #     signing_address = get_signing_key()
+    #     if not signing_address:
+    #         raise ValueError(
+    #             "signing_address must be provided if signing connections (keyring)"
+    #         )
 
     agent_ips = agent_ips.split(",")
     agent_ips = list(filter(None, agent_ips))
@@ -434,13 +493,28 @@ def run_single_app(
     app_config = {}
     components_config = {}
 
+    # typer sucks with enums
+    app_mode_map = {
+        "FILESERVER": AppMode.FILESERVER,
+        "SINGLE_COMPONENT": AppMode.SINGLE_COMPONENT,
+        "MULTI_COMPONENT": AppMode.MULTI_COMPONENT,
+    }
+
     app_config["comms_port"] = comms_port
-    app_config["sign_connections"] = sign_connections
-    app_config["signing_key"] = signing_address
+    # app_config["sign_connections"] = sign_connections
+    # app_config["signing_key"] = signing_address
     app_config["fluxnode_ips"] = agent_ips
     app_config["groups"] = {"all": {"state_directives": []}}
+    app_config["app_mode"] = app_mode_map[app_mode.value]
+    app_config["fileserver_dir"] = fileserver_dir
 
-    components = list(filter(None, components.split(",")))
+    if components:
+        components = list(filter(None, components.split(",")))
+    else:
+        # we are running as fileserver
+        components = ["FILESERVER"]
+        remote_workdir = WWW_ROOT
+
     for component_str in components:
         groups = ["all"]
         component_items = list(filter(None, component_str.split(":")))
@@ -512,9 +586,18 @@ def run_single_app(
         else:
             components_config[component_name]["state_directives"].append(directive)
 
+    # if app_mode == LocalAppMode.FILESERVER:
+    #     if fileserver_dir.is_dir():
+
+    #     root_dir = Path(vault_dir).resolve()
+    # else:
+
+    root_dir = Path(vault_dir) / app_name
+
     config = {"app_config": app_config, "components": components_config}
 
-    app = FluxKeeper.build_app(app_name, Path(vault_dir) / app_name, config)
+    app = FluxKeeper.build_app(app_name, root_dir, config)
+
     flux_keeper = FluxKeeper(
         # gui=gui,
         app=app
@@ -527,7 +610,8 @@ def run_single_app(
     try:
         loop.run_until_complete(main())
     except Exception as e:
-        print(f"Error closing down: {e}")
+        print("Error closing down !!!")
+        traceback.print_exc()
     finally:
         flux_keeper.cleanup()
 
@@ -603,14 +687,14 @@ def agent(
         envvar=f"{PREFIX}_BIND_PORT",
         show_envvar=False,
     ),
-    enable_registrar: bool = typer.Option(
-        False,
-        "--registrar",
-        "-s",
-        envvar=f"{PREFIX}_REGISTRAR",
-        show_envvar=False,
-        help="Act as a proxy registrar for other agents",
-    ),
+    # enable_registrar: bool = typer.Option(
+    #     False,
+    #     "--registrar",
+    #     "-s",
+    #     envvar=f"{PREFIX}_REGISTRAR",
+    #     show_envvar=False,
+    #     help="Act as a proxy registrar for other agents",
+    # ),
     registrar_port: int = typer.Option(
         "2080",
         "--registrar-port",
@@ -627,11 +711,11 @@ def agent(
         show_envvar=False,
         help="Address for registrar to bind on",
     ),
-    enable_registrar_fileserver: bool = typer.Option(
+    enable_fileserver: bool = typer.Option(
         False,
-        "--registrar-fileserver",
+        "--fileserver",
         "-q",
-        envvar=f"{PREFIX}_REGISTRAR_FILESERVER",
+        envvar=f"{PREFIX}_FILESERVER",
         show_envvar=False,
         help="Serve files over http (no authentication)",
     ),
@@ -659,11 +743,11 @@ def agent(
         show_envvar=False,
         help="Expects all keeper connections to be signed",
     ),
-    zelid: str = typer.Option(
+    auth_id: str = typer.Option(
         "",
-        envvar=f"{PREFIX}_ZELID",
+        envvar=f"{PREFIX}_AUTH_ID",
         show_envvar=False,
-        help="Testing only... if you aren't running this on a Fluxnode",
+        help="If you're using an auth address other than your zelid",
     ),
     subordinate: bool = typer.Option(
         False,
@@ -700,13 +784,12 @@ def agent(
     whitelisted_addresses = whitelisted_addresses.split(",")
     whitelisted_addresses = list(filter(None, whitelisted_addresses))
 
-    registrar = None
-    if enable_registrar:
-        registrar = FluxAgentRegistrar(
-            bind_address=registrar_address,
-            bind_port=registrar_port,
-            enable_fileserver=enable_registrar_fileserver,
-        )
+    registrar = FluxAgentRegistrar(
+        bind_address=registrar_address,
+        bind_port=registrar_port,
+        enable_fileserver=enable_fileserver,
+        working_dir=WWW_ROOT,
+    )
 
     primary_agent = None
     if subordinate:
@@ -719,13 +802,12 @@ def agent(
     agent = FluxAgent(
         bind_address=bind_address,
         bind_port=bind_port,
-        enable_registrar=enable_registrar,
         registrar=registrar,
         primary_agent=primary_agent,
         whitelisted_addresses=whitelisted_addresses,
         verify_source_address=verify_source_address,
         signed_vault_connections=signed_vault_connections,
-        zelid=zelid,
+        auth_id=auth_id,
         subordinate=subordinate,
     )
 
@@ -762,13 +844,21 @@ def main(
 
 
 @keys.command(help="Delete specified private key from keyring")
-def remove(zelid: str):
+def remove(address: str):
     try:
-        keyring.delete_password("fluxvault_app", zelid)
+        keyring.delete_password("fluxvault_app", address)
     except keyring.errors.PasswordDeleteError:
-        typer.echo("Private key doesn't exist")
+        typer.echo("Private key already deleted")
     else:
         typer.echo("Private key deleted")
+    finally:
+        root = FluxKeeper.setup()
+        db_dir = root / "db"
+        con = sqlite3.connect(db_dir / "fluxvault.db")
+        cur = con.cursor()
+
+        with con:
+            cur.execute(f"DELETE FROM STORED_KEYS WHERE address = '{address}'")
 
 
 def entrypoint():

@@ -8,7 +8,7 @@
 # All files under 50Mb are sent inband, anything larger is chunked and streamed (encrypted)
 
 # All files / dirs in staging, and all files / dirs in appropriate groups are symlinked into fake_root
-# (the remote root dir, a.k.a /) then transfered. These symlinks are removed upon termination 
+# (the remote root dir, a.k.a /) then transfered. These symlinks are removed upon termination
 
 # sync strategy can be one of the following (default is STRICT) it only applies to directories
 # Files are STRICT by default (any other options ignored)
@@ -54,8 +54,9 @@
 apps:
   gravyboat:
     # vault_dir: /Users/bob/custom_vaultdir
+
     remote_workdir: /tmp/gravyboat
-    fluxnode_ips: [172.26.26.151]
+    fluxnode_ips: [172.26.26.198]
     comms_port: 8888
     groups:
       # all components are automatically a member of this group
@@ -85,15 +86,13 @@ apps:
           - content_source: blah.txt
             # this file gets crc checked and replaced if different
             sync_strategy: STRICT
-            # if content_source isn't used, fluxvault will look in the component staging_dir to see if an 
+            # if content_source isn't used, fluxvault will look in the component staging_dir to see if an
             # objects name matches. This could potentially be problematic, if it doubt, use content_source. Name / remote dir
             # is more for if you put your objects directly in fake_root.
           - name: salami
             remote_dir: /tmp/jumbo
             sync_strategy: STRICT
         # managed_tasks: NOT IMPLEMENTED (YET)
-
-
 # Here is the equivalent using the command line. However, there are some limitations:
 
 # Only one app can be run at a time
@@ -102,7 +101,6 @@ apps:
 # All components inherit the same workdir from the app
 
 # If you need to run multiple apps, or different workdirs per component - use a loadout.
-
 
 # Components: <name 1>:<group 1>:<group n>,<name 2>:<group 7>,<name 3>
 #                                 <app-name>       <components>
@@ -123,8 +121,8 @@ apps:
 # If not specified, the local file / dir name will be used with the working dir of the agent
 # sync strategy: OPTIONAL. Must be one of S, A, C. S = STRICT, A = ADDS_ALLOWED, C = ENSURE_CREATED. ENSURE_CREATED by default.
 
- # state directives
- # To set sync_strategy on remote object (you have already put object in fake_root):
- # - name: file or dir name
- #   remote_dir: parent directory of file or dir
- #   sync_strategy: your sync strat
+# state directives
+# To set sync_strategy on remote object (you have already put object in fake_root):
+# - name: file or dir name
+#   remote_dir: parent directory of file or dir
+#   sync_strategy: your sync strat

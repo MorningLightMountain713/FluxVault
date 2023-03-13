@@ -287,6 +287,11 @@ class ConcreteFsEntry:
 
     def get_child(self, target: Path) -> ConcreteFsEntry | None:
         relative_path = target.relative_to(self.path)
+
+        if len(relative_path.parts) > 1:
+            child_index = self.children_index.get(Path(relative_path.parts[0]))
+            return self.children[child_index].get_child(target)
+
         if child_index := self.children_index.get(relative_path, None):
             return self.children[child_index]
 
@@ -315,6 +320,9 @@ class ConcreteFsEntry:
                 )
 
     def root(self) -> ConcreteFsEntry:
+        if self.depth == 0:
+            return self
+
         ancestor_count = self.depth
         parent = None
 
@@ -339,6 +347,13 @@ class ConcreteFsEntry:
             else:
                 parents.insert(0, parents[0].parent)
         return parents
+
+    def decendants(self) -> list[Path]:
+        """Returns all child paths down the tree"""
+        if self.path.is_dir():
+            return [f for f in self.path.glob("**/*")]
+        else:
+            return []
 
     def last_sibling_dir(self, child: ConcreteFsEntry) -> bool:
         """Called from a child to a parent; Finds out if child is the last
@@ -409,8 +424,9 @@ class ConcreteFsEntry:
 
         return crc
 
-    def crc_directory(self, directory: Path, crc: int) -> int:
-        crc = binascii.crc32(directory.name.encode(), crc)
+    def crc_directory(self, directory: Path, crc: int, name: str = "") -> int:
+        dir_name = name if name else directory.name
+        crc = binascii.crc32(dir_name.encode(), crc)
 
         for path in sorted(directory.iterdir(), key=lambda p: str(p).lower()):
             crc = binascii.crc32(path.name.encode(), crc)
@@ -421,9 +437,9 @@ class ConcreteFsEntry:
                 crc = self.crc_directory(path, crc)
         return crc
 
-    def crc32(self) -> int:
+    def crc32(self, name: str = "") -> int:
         if self.fs_type == FsType.DIRECTORY:
-            return self.crc_directory(self.path, 0)
+            return self.crc_directory(self.path, 0, name=name)
         elif self.fs_type == FsType.FILE:
             return self.crc_file(self.path, 0)
 
@@ -431,16 +447,22 @@ class ConcreteFsEntry:
         crc = self.crc_file(file, 0)
         return {str(file): crc}
 
-    def get_directory_hashes(self, dir: Path | None = None) -> dict[str, int]:
+    def get_directory_hashes(
+        self, dir: Path | None = None, name: str | None = None
+    ) -> dict[str, int]:
         """Returns a dictionary of every fs object and it's corresponding crc32"""
         hashes = {}
 
+        # fix all this... needs to hash the filename too, otherwise
+        # we get the wrong hash if new empty file added
         if not dir and not self.storable:
             return hashes
 
         p = dir if dir else self.path
 
-        crc = binascii.crc32(p.name.encode())
+        dir_name = name if name else p.name
+
+        crc = binascii.crc32(dir_name.encode())
         hashes.update({str(p): crc})
 
         for path in sorted(p.iterdir(), key=lambda p: str(p).lower()):
@@ -470,6 +492,7 @@ class FsEntryStateManager:
     remote_object_exists: bool = False
     in_sync: bool = False
     concrete_fs: ConcreteFsEntry | None = None
+    # root_name: str = ""
 
     @property
     def local_path(self):
@@ -494,7 +517,21 @@ class FsEntryStateManager:
     @property
     def absolute_remote_path(self) -> Path:
         # this is ugly, fix
-        if self.concrete_fs.parent.path.name == "fake_root":
+        # if self.concrete_fs.parent:
+        #     print("CONCRETE FS PARENT", self.concrete_fs.parent.path)
+        # else:
+        #     print("NO CONCRETE FS PARENT")
+        # print("NAME", self.name)
+        # # this is the fileserver root
+        # if self.concrete_fs.parent == None:
+
+        #     return self.remote_workdir
+
+        # fileserver
+        # if self.root_name:
+        #     return self.remote_workdir / self.root_name
+
+        if self.concrete_fs.parent and self.concrete_fs.parent.path.name == "fake_root":
             return "/" / Path(self.name)
 
         match self.remit.remote_dir:
@@ -528,6 +565,10 @@ class FsEntryStateManager:
 
     def validate_local_object(self):
         # this doesn't make sense anymore, validation is done as part of instantiation
+        # If we're the root object, fake the name for crc
+        # if self.concrete_fs.depth == 0:
+        #     self.local_crc = self.concrete_fs.crc32(name=self.name)
+        # else:
         self.local_crc = self.concrete_fs.crc32()
 
     def compare_objects(self):
@@ -585,19 +626,25 @@ class FsStateManager:
         cls, current_path: Path, existing_paths: list[Path]
     ) -> list[Path]:
         # this needs heavy testing
-        for existing_path in existing_paths.copy():
+
+        paths = existing_paths
+        for existing_path in existing_paths:
             if current_path.is_relative_to(existing_path):
                 # our ancestor is already in the list. We will get replaced
                 # when they get synced (don't add ourselves)
-                continue
+                return paths
 
             elif existing_path.is_relative_to(current_path):
                 # we are higher up the tree.. remove existing_path and
                 # install ourselves
-                existing_paths.remove(existing_path)
-                existing_paths.append(current_path)
+                paths.remove(existing_path)
+                paths.append(current_path)
+                return paths
 
-        return existing_paths
+        # sibling
+        paths.append(current_path)
+
+        return paths
 
     def set_syncronized(self, targets: list[Path]):
         for target in targets:

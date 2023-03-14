@@ -2,6 +2,8 @@
 
 # docker network create http
 
+# old notes
+
 #app
 
 # docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' fluxagent_demoVault
@@ -16,6 +18,8 @@
 
 FROM python:3.9-bullseye
 
+# RUN apt update && apt install iputils-ping -y
+
 WORKDIR /app
 
 RUN pip install aiohttp
@@ -25,13 +29,18 @@ echo 'from aiohttp import web, ClientSession
 from aiohttp.client_exceptions import ClientConnectorError
 
 import os
+import sys
 
+if len(sys.argv) > 1:
+    agent_name = sys.argv[1]
+else:
+    agent_name = "fluxagent_demoVault"
 
 async def get():
     async with ClientSession() as session:
         try:
             async with session.get(
-                "http://fluxagent_demoVault:2080/file/quotes.txt"
+                f"http://{agent_name}:2080/file/quotes.txt"
             ) as resp:
                 data = await resp.text()
                 return (resp.status, data)
@@ -66,4 +75,4 @@ if __name__ == "__main__":
     web.run_app(app)' > myapp.py
 EOF
 
-CMD [ "python", "myapp.py" ]
+ENTRYPOINT [ "python", "myapp.py" ]

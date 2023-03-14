@@ -171,13 +171,22 @@ class FluxAgentRegistrar:
         # We only accept connections from local network. (Protect against punter
         # exposing the fileserver port on the internet)
 
-        if not ipaddress.ip_address(request.remote).is_private:
-            return web.Response(
-                body="Unauthorized",
-                status=403,
-            )
-        remote_component, remote_app = get_app_and_component_name(request.remote)
+        # Flux bug: Flux is allocating outside rfc1918 so this is broken.
+
+        # if not ipaddress.ip_address(request.remote).is_private:
+        #     log.warn(
+        #         f"Received request from non private ip address {request.remote}... unauthorized"
+        #     )
+        #     return web.Response(
+        #         body="Unauthorized",
+        #         status=403,
+        #     )
+
+        _, remote_app = get_app_and_component_name(request.remote)
         if remote_app != self.app_name:
+            log.warn(
+                f"Request from {request.remote} denied. {remote_app} does not match local: {self.app_name}"
+            )
             return web.Response(
                 body="Unauthorized",
                 status=403,

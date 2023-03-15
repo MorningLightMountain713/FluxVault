@@ -33,7 +33,7 @@ from fluxrpc.server import RPCServer
 from fluxrpc.transports.socket.server import EncryptedSocketServerTransport
 from rich.pretty import pprint
 
-from fluxvault.constants import STATE_ROOT, STATE_SIG, STATEFILE, WWW_ROOT
+from fluxvault.constants import STATE_SIG, WWW_ROOT, PLUGIN_DIR, SSL_DIR
 from fluxvault.extensions import FluxVaultExtensions
 from fluxvault.helpers import AppMode, bytes_to_human, get_app_and_component_name
 from fluxvault.log import log
@@ -533,7 +533,7 @@ class FluxAgent:
         if self.registrar:
             self.registrar.ready_to_serve = True
 
-    async def load_plugins(self, directory: str):
+    async def load_plugins(self, directory: str = PLUGIN_DIR):
         p = Path(directory)
 
         log.info(f"loading plugins from directory {p}")
@@ -576,9 +576,9 @@ class FluxAgent:
             else:
                 log.error("Plugin load error... skipping")
 
-    async def generate_csr(self):
+    async def generate_csr(self, fqdn: str = "", keyname: str = "id_rsa"):
         # ToDo: this needs to include a Fluxnode identifier
-        altname = f"{self.component_name}.{self.app_name}.com"
+        altname = fqdn if fqdn else f"{self.component_name}.{self.app_name}.com"
 
         log.info(f"Generating CSR with altname {altname}")
 
@@ -586,7 +586,19 @@ class FluxAgent:
             public_exponent=65537,
             key_size=2048,
         )
-        self.key = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+        # we want to save the key to file
+        if fqdn:
+            path = SSL_DIR / keyname
+            with open(path, "w") as stream:
+                stream.write(
+                    key.private_bytes(
+                        Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+                    ).decode()
+                )
+        else:
+            self.key = key.private_bytes(
+                Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+            )
 
         # public = key.public_key().public_bytes(
         #     Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
@@ -613,17 +625,22 @@ class FluxAgent:
         )
         return {"csr": csr.public_bytes(Encoding.PEM)}
 
-    async def install_cert(self, cert_bytes: bytes):
-        self.cert = cert_bytes
-        cert = x509.load_pem_x509_certificate(cert_bytes)
-        issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-        san = cert.extensions.get_extension_for_oid(
-            ExtensionOID.SUBJECT_ALTERNATIVE_NAME
-        ).value.get_values_for_type(x509.DNSName)
-        log.info(f"Installing cert from issuer {issuer} with Alt names {san}")
+    async def install_cert(self, cert_bytes: bytes, name: str = ""):
+        if not name:
+            self.cert = cert_bytes
+            cert = x509.load_pem_x509_certificate(cert_bytes)
+            issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+            san = cert.extensions.get_extension_for_oid(
+                ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            ).value.get_values_for_type(x509.DNSName)
+            log.info(f"Installing cert from issuer {issuer} with Alt names {san}")
 
-        # ToDo: this timing seems a bit off?
-        await self.sub_agent.update_local_agent(enrolled=True)
+            # ToDo: this timing seems a bit off?
+            await self.sub_agent.update_local_agent(enrolled=True)
+        else:
+            path = SSL_DIR / name
+            with open(path, "w") as stream:
+                stream.write(cert_bytes.decode())
 
     async def upgrade_connection(self):
         self.rpc_server.transport.upgrade_socket()

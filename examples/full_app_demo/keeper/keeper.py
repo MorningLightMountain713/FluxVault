@@ -7,6 +7,7 @@ import sys
 
 from fluxvault import FluxKeeper
 from fluxvault.extensions import FluxVaultExtensions
+from fluxvault.helpers import manage_transport
 
 extensions = FluxVaultExtensions()
 
@@ -29,23 +30,6 @@ stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 
 log.addHandler(stream_handler)
-
-
-def manage_transport(f):
-    async def wrapper(*args, **kwargs):
-        agent = kwargs.get("agent")
-        await agent.transport.connect()
-
-        if not agent.transport.connected:
-            log.info("Transport not connected... skipping.")
-            return {}
-
-        res = await f(*args, **kwargs)
-        await agent.transport.disconnect()
-
-        return res
-
-    return wrapper
 
 
 @manage_transport

@@ -3,9 +3,10 @@ import io
 import re
 import socket
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from ownca import CertificateAuthority
 
 import dns.resolver
 import dns.reversename
@@ -28,6 +29,7 @@ def manage_transport(f):
     async def wrapper(*args, **kwargs):
         # ToDO: brittle. Popping args feels hella dirty
         func_args = list(args)
+
         disconnect = func_args.pop()
         connect = func_args.pop()
         agent = func_args[-1]
@@ -144,6 +146,13 @@ def size_of_object(path: Path) -> int:
 
 
 @dataclass
+class FluxVaultContext:
+    agents: dict
+    ca: CertificateAuthority
+    storage: dict = field(default_factory=dict)
+
+
+@dataclass
 class RemoteStateDirective:
     """"""
 
@@ -234,4 +243,4 @@ def get_app_and_component_name(_ip: str | None = None) -> list:
         comp = randomname.get_name()
         app = "testapp"
 
-    return (comp, app)
+    return comp, app

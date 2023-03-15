@@ -1,12 +1,11 @@
 import asyncio
 import getpass
 import hashlib
-import logging
 import sqlite3
 import traceback
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import keyring
 import pandas
@@ -17,9 +16,7 @@ from Cryptodome.Random import get_random_bytes
 from tabulate import tabulate
 
 from fluxvault import FluxAgent, FluxKeeper
-from fluxvault.constants import WWW_ROOT
-from fluxvault.fluxapp import FluxApp, FluxComponent, FluxTask, RemoteStateDirective
-from fluxvault.fs import FsEntryStateManager
+from fluxvault.constants import WWW_ROOT, VAULT_DIR
 from fluxvault.helpers import AppMode, SyncStrategy
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent
 
@@ -242,6 +239,42 @@ def list_apps(
     )
 
 
+def make_app_dirs(
+    app_name: str, component_names: list = [], vault_dir: str | Path = VAULT_DIR
+) -> Path:
+    app_dir = Path(vault_dir) / app_name
+    groups_dir = app_dir / "groups"
+    all_group_dir = groups_dir / "all"
+    components_dir = app_dir / "components"
+
+    app_dir.mkdir(parents=True, exist_ok=True)
+    groups_dir.mkdir(parents=True, exist_ok=True)
+    all_group_dir.mkdir(parents=True, exist_ok=True)
+    components_dir.mkdir(parents=True, exist_ok=True)
+
+    for component_name in component_names:
+        component_dir = components_dir / component_name
+        staging_dir = component_dir / "staging_dir"
+        fake_root = component_dir / "fake_root"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        fake_root.mkdir(parents=True, exist_ok=True)
+
+    return app_dir
+
+
+@config.command(help="Build your apps filesystem")
+def build_app_filesystem(
+    app_name: str = typer.Argument(
+        ...,
+        envvar=f"{PREFIX}_APP_NAME",
+        show_envvar=False,
+    ),
+    component_names: List[str] = typer.Argument(...),
+):
+    make_app_dirs(app_name, component_names)
+
+
 @config.command(
     help="""Load new apps into config, use `run` method to run them
 
@@ -329,16 +362,11 @@ def add_apps_via_loadout_file(
 
         # only used at app level
         vault_dir = app_directives.pop("vault_dir")
-
-        app_dir = Path(vault_dir) / Path(app_name)
-        groups_dir = app_dir / "groups"
-        components_dir = app_dir / "components"
-
-        app_dir.mkdir(parents=True, exist_ok=True)
-        groups_dir.mkdir(parents=True, exist_ok=True)
-        components_dir.mkdir(parents=True, exist_ok=True)
-
         components: dict = app_directives.pop("components")
+        component_names = components.keys()
+
+        app_dir = make_app_dirs(app_name, component_names, vault_dir)
+
         for component_directives in components.values():
             if not component_directives.get("remote_workdir"):
                 component_directives["remote_workdir"] = app_directives.get(

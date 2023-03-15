@@ -47,6 +47,7 @@ from fluxvault.helpers import (
     AppMode,
     FluxVaultKeyError,
     SyncStrategy,
+    FluxVaultContext,
     bytes_to_human,
     manage_transport,
 )
@@ -60,12 +61,6 @@ CONFIG_NAME = "config.yaml"
 # app_dir is portable
 # The only common format is absolute_remote
 # only way to convert back and forward is with managed_object
-
-
-@dataclass
-class FluxVaultContext:
-    agents: dict
-    storage: dict = field(default_factory=dict)
 
 
 class FluxKeeper:
@@ -112,9 +107,11 @@ class FluxKeeper:
                                 f"Error parsing vault config file: {CONFIG_NAME} for app {app_dir}. Exc: {e}"
                             )
                 except (FileNotFoundError, PermissionError) as e:
-                    raise ValueError(
+                    log.error(
                         f"Error opening config file {CONFIG_NAME} for app {app_dir}. Exc: {e}"
                     )
+                    continue
+
                 self.apps.append(
                     self.build_app(app_dir.name, self.vault_dir / app_dir.name, config)
                 )
@@ -296,6 +293,9 @@ class FluxKeeper:
         for app in self.apps:
             app.remove_catalogue()
 
+    def get_app_manager_by_name(self, name: str) -> FluxAppManager:
+        return next(filter(lambda x: x.app.name == name, self.managed_apps), None)
+
     async def manage_apps(self, run_once: bool, polling_interval: int):
         tasks = []
 
@@ -321,12 +321,10 @@ class FluxAppManager:
         self,
         keeper: FluxKeeper,
         app: FluxApp,
-        extensions: FluxVaultExtensions = FluxVaultExtensions(),
     ):
         self.keeper = keeper
         self.app = app
         self.agents = []
-        self.extensions = extensions
         self.network_state = {}
 
         self.build_agents()
@@ -418,6 +416,12 @@ class FluxAppManager:
         if self.app.sign_connections and self.app.signing_key:
             auth_provider = SignatureAuthProvider(key=self.app.signing_key)
 
+        # this seems pretty broken
+        if self.app.app_mode == AppMode.SINGLE_COMPONENT:
+            component_name = self.app.get_component().name
+        else:
+            component_name = "fluxagent"
+
         for ip in fluxnode_ips:
             transport = EncryptedSocketClientTransport(
                 ip,
@@ -428,17 +432,17 @@ class FluxAppManager:
                 on_pty_closed_callback=self.keeper.gui.pty_closed,
             )
             flux_agent = RPCClient(
-                JSONRPCProtocol(), transport, (self.app.name, ip, "fluxagent")
+                JSONRPCProtocol(), transport, (self.app.name, ip, component_name)
             )
             self.add(flux_agent)
 
     def register_extensions(self):
-        self.extensions.add_method(self.get_all_agents_methods)
-        self.extensions.add_method(self.poll_all_agents)
+        self.app.extensions.add_method(self.get_all_agents_methods)
+        self.app.extensions.add_method(self.poll_all_agents)
 
     def get_methods(self):
         """Returns methods available for the keeper to call"""
-        return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
+        return {k: v.__doc__ for k, v in self.app.extensions.method_map.items()}
 
     def get_all_agents_methods(self) -> dict:
         return self.keeper.loop.run_until_complete(self._get_agents_methods())
@@ -796,6 +800,11 @@ class FluxAppManager:
         self.keeper.loop.run_until_complete(self.run_agent_tasks())
 
     @manage_transport
+    async def load_agent_plugins(self, agent: RPCClient):
+        agent_proxy = agent.get_proxy()
+        await agent_proxy.load_plugins()
+
+    @manage_transport
     async def enroll_agent(self, agent: RPCClient):
         log.info(f"Enrolling agent {agent.id}")
         proxy = agent.get_proxy()
@@ -820,13 +829,6 @@ class FluxAppManager:
         # be it's own action
         await proxy.install_cert(cert.cert_bytes)
         await proxy.install_ca_cert(self.keeper.ca.cert_bytes)
-
-        proxy.notify()
-        await proxy.upgrade_to_ssl()
-
-        # ToDo: function (don't mutate child properties)
-        agent.transport.proxy_ssl = True
-        agent.transport.proxy_port += 1
 
     @manage_transport
     async def set_mode(self, agent: RPCClient):
@@ -902,6 +904,7 @@ class FluxAppManager:
         if self.app.app_mode == AppMode.FILESERVER:
             tasks.insert(2, self.load_manifest)
 
+        # I think this breaks in certain situations. LIke it won't disconnect
         for index, func in enumerate(tasks):
             log.info(f"Running task: {func.__name__}")
             # ToDo: if iscoroutine
@@ -928,12 +931,12 @@ class FluxAppManager:
 
     def __getattr__(self, name: str) -> Callable:
         try:
-            func = self.extensions.get_method(name)
+            func = self.app.extensions.get_method(name)
         except MethodNotFoundError as e:
             raise AttributeError(f"Method does not exist: {e}")
 
         if func.pass_context:
-            context = FluxVaultContext(self.agents)
+            context = FluxVaultContext(self.agents, self.keeper.ca)
             func = functools.partial(func, context)
 
         return func

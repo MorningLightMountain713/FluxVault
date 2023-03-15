@@ -7,6 +7,7 @@ from rich.pretty import pprint
 from fluxvault.fs import ConcreteFsEntry, FsEntryStateManager, FsStateManager, FsType
 from fluxvault.helpers import AppMode, RemoteStateDirective, SyncStrategy
 from fluxvault.log import log
+from fluxvault.fluxkeeper import FluxVaultExtensions
 
 
 @dataclass
@@ -302,6 +303,8 @@ class FluxApp:
     fileserver_dir: Path = field(default_factory=Path)
     fluxnode_ips: list[str] = field(default_factory=list)
     app_mode: AppMode = AppMode.MULTI_COMPONENT
+    # don't really like that this is here... Crosses a functional line?
+    extensions: FluxVaultExtensions = field(default_factory=FluxVaultExtensions)
 
     def add_component(self, component: FluxComponent):
         existing = next(
@@ -322,8 +325,8 @@ class FluxApp:
 
         return component
 
-    def get_component(self, name: str) -> FluxComponent:
-        if self.app_mode == AppMode.FILESERVER:
+    def get_component(self, name: str = "") -> FluxComponent:
+        if self.app_mode in [AppMode.FILESERVER, AppMode.SINGLE_COMPONENT]:
             return self.components[0]
 
         return next(filter(lambda x: x.name == name, self.components), None)

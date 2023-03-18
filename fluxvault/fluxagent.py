@@ -98,7 +98,7 @@ class FluxAgent:
             bind_address,
             bind_port,
             whitelisted_addresses=whitelisted_addresses,
-            verify_source_address=verify_source_address,
+            verify_source_address=self.verify_source_address,
             auth_provider=self.auth_provider,
         )
         self.rpc_server = RPCServer(transport, JSONRPCProtocol(), self.extensions)
@@ -545,10 +545,12 @@ class FluxAgent:
         p.mkdir(parents=True, exist_ok=True)
 
         plugins = [
-            f.rstrip(".py") for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))
+            f.name.rstrip(".py")
+            for f in p.iterdir()
+            if not f.is_dir() and not str(f).endswith("runner.py")
         ]
 
-        log.debug(f"Plugins available: {plugins}")
+        log.info(f"Plugins available: {plugins}")
 
         for f in plugins:
             importlib.invalidate_caches()
@@ -558,8 +560,12 @@ class FluxAgent:
             except Exception as e:
                 log.error(e)
             plugin = plugin.plugin
+            # tidy up
             if isinstance(plugin, FluxVaultExtensions):
                 if plugin.required_packages:
+                    log.info(
+                        f"Installing the following packages: {plugin.required_packages}"
+                    )
                     try:
                         subprocess.run(
                             [sys.executable, "-m", "pip", "install"]
@@ -571,6 +577,17 @@ class FluxAgent:
                     except subprocess.CalledProcessError:
                         log.error("Error loading extensions packages, skipping")
                         return
+                    try:
+                        runner = importlib.import_module(f"{f}_runner")
+                    except Exception as e:
+                        print(repr(e))
+                    else:
+                        plugin = runner.plugin
+                        if not isinstance(plugin, FluxVaultExtensions):
+                            log.error(
+                                f"Bad runner... plugin is not a FluxVault extensions"
+                            )
+
                 self.extensions.add_plugin(plugin)
                 log.info(f"Plugin {plugin.plugin_name} loaded")
             else:

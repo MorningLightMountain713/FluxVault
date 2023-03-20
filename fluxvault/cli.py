@@ -624,7 +624,7 @@ def run_single_app(
 
     flux_keeper = FluxKeeper(
         # gui=gui,
-        app=app
+        apps=[app]
     )
 
     async def main():

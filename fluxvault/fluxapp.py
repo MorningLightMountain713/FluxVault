@@ -4,10 +4,10 @@ from pathlib import Path
 import yaml
 from rich.pretty import pprint
 
-from fluxvault.fs import ConcreteFsEntry, FsEntryStateManager, FsStateManager, FsType
+from fluxvault.fs import ConcreteFsEntry, FsEntryStateManager, FsStateManager
 from fluxvault.helpers import AppMode, RemoteStateDirective, SyncStrategy
 from fluxvault.log import log
-from fluxvault.fluxkeeper import FluxVaultExtensions
+from fluxvault.extensions import FluxVaultExtensions
 
 
 @dataclass

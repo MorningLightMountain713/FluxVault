@@ -26,6 +26,7 @@ from fluxrpc.client import RPCClient, RPCProxy
 from fluxrpc.exc import MethodNotFoundError
 from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
+from fluxrpc.transports.socket.symbols import NO_SOCKET
 from ownca import CertificateAuthority
 from ownca.exceptions import OwnCAInvalidCertificate
 from rich.pretty import pprint
@@ -33,11 +34,10 @@ from rich.pretty import pprint
 # this package
 from fluxvault.app_init import setup_filesystem_and_wallet
 from fluxvault.constants import WWW_ROOT
-from fluxvault.extensions import FluxVaultExtensions
 from fluxvault.fluxapp import (
     FluxApp,
     FluxComponent,
-    FluxTask,
+    # FluxTask,
     FsEntryStateManager,
     FsStateManager,
     RemoteStateDirective,
@@ -48,6 +48,8 @@ from fluxvault.helpers import (
     FluxVaultKeyError,
     SyncStrategy,
     FluxVaultContext,
+    FluxTask,
+    AgentId,
     bytes_to_human,
     manage_transport,
 )
@@ -75,7 +77,7 @@ class FluxKeeper:
     def __init__(
         self,
         vault_dir: str | None = None,
-        app: FluxApp | None = None,
+        apps: FluxApp | None = None,
         # gui: bool = False,
     ):
 
@@ -89,11 +91,12 @@ class FluxKeeper:
         self.qualify_vault_dir(vault_dir)
         self.apps: list[FluxApp] = []
 
-        # Allow one app to be passed in, otherwise - look up config
-        if app and isinstance(app, FluxApp):
-            self.apps.append(app)
+        # Allow apps to be passed in, otherwise - look up config
+        for app in apps:
+            if isinstance(app, FluxApp):
+                self.apps.append(app)
 
-        else:
+        if not self.apps:
             for app_dir in self.vault_dir.iterdir():
                 if not app_dir.is_dir():
                     continue
@@ -188,13 +191,13 @@ class FluxKeeper:
     # do this as a lambda?
     # flux_tasks = []
     # map(lambda x: flux_tasks.append(FluxTask(x.get("name"), x.get("params"))), tasks)
-    @classmethod
-    def tasks_builder(cls, tasks: list) -> list:
-        flux_tasks = []
-        for task in tasks:
-            flux_task = FluxTask(task.get("name"), task.get("params"))
-            flux_tasks.append(flux_task)
-        return flux_tasks
+    # @classmethod
+    # def tasks_builder(cls, tasks: list) -> list:
+    #     flux_tasks = []
+    #     for task in tasks:
+    #         flux_task = FluxTask(task.get("name"), task.get("params"))
+    #         flux_tasks.append(flux_task)
+    #     return flux_tasks
 
     @classmethod
     def build_app(cls, name: str, app_dir: str, config: dict) -> FluxApp:
@@ -301,7 +304,7 @@ class FluxKeeper:
 
         async def manage(app_manager: FluxAppManager):
             while True:
-                await app_manager.run_agent_tasks()
+                await app_manager.run_agents_async()
 
                 if run_once:
                     break
@@ -373,7 +376,7 @@ class FluxAppManager:
     def add(self, agent: RPCClient):
         self.agents.append(agent)
 
-    def get_by_id(self, id):
+    def get_agent_by_id(self, id: tuple):
         for agent in self.agents:
             if agent.id == id:
                 return agent
@@ -401,12 +404,13 @@ class FluxAppManager:
         return list(filter(lambda x: not x.is_proxied, self.agents))
 
     def build_agents(self):
-        loop = asyncio.get_event_loop()
 
         fluxnode_ips = (
             self.app.fluxnode_ips
             if self.app.fluxnode_ips
-            else loop.run_until_complete(self.get_fluxnode_ips(self.app.name))
+            else self.keeper.loop.run_until_complete(
+                self.get_fluxnode_ips(self.app.name)
+            )
         )
 
         if not self.app.signing_key and self.app.sign_connections:
@@ -841,6 +845,13 @@ class FluxAppManager:
     #     resp = await agent_proxy.enable_registrar_fileserver()
 
     @manage_transport
+    async def get_agents_state(self, agent: RPCClient) -> str:
+        agent_proxy = agent.get_proxy()
+        resp = await agent_proxy.get_container_state()
+
+        return resp
+
+    @manage_transport
     async def enroll_subordinates(self, agent: RPCClient):
         agent_proxy = agent.get_proxy()
         resp = await agent_proxy.get_subagents()
@@ -885,49 +896,157 @@ class FluxAppManager:
 
         return flux_agent
 
-    async def run_agent_tasks(self, tasks: list[Callable] = []):
+    def set_default_tasks(self) -> list[Callable]:
+        tasks = [
+            self.build_task("sync_objects"),
+            self.build_task("set_mode"),
+            self.build_task("get_state"),
+        ]
+
+        if self.app.app_mode != AppMode.FILESERVER:
+            tasks.insert(0, FluxTask("enroll_subordinates"))
+
+        if self.app.app_mode == AppMode.FILESERVER:
+            tasks.insert(2, FluxTask("load_manifest"))
+
+        return tasks
+
+    def build_task(
+        self, name: str, args: list = [], kwargs: dict = {}
+    ) -> FluxTask | None:
+        try:
+            func = getattr(self, name)
+        except AttributeError:
+            log.warn(f"Task {name} not found, skipping")
+            return
+
+        return FluxTask(name=name, args=args, kwargs=kwargs, func=func)
+
+    async def run_agents_async(
+        self,
+        tasks: list[FluxTask] = [],
+        stay_connected: bool = False,
+        targets: dict[AgentId, list[FluxTask]] = {},
+        async_tasks: bool = True,
+    ) -> list:
+        # async_tasks = run tasks async instead of current sync
+        # probably not needed, but possible
         if not self.agents:
             log.info("No agents found... nothing to do")
             return
 
-        # headless mode
-        # ToDo: add cli `tasks` thingee
         if not tasks:
-            tasks = [
-                self.sync_objects,
-                self.set_mode,
-                self.get_state,
-            ]
-        if self.app.app_mode != AppMode.FILESERVER:
-            tasks.insert(0, self.enroll_subordinates)
+            tasks = self.set_default_tasks()
 
-        if self.app.app_mode == AppMode.FILESERVER:
-            tasks.insert(2, self.load_manifest)
+        coroutines = []
 
-        # I think this breaks in certain situations. LIke it won't disconnect
-        for index, func in enumerate(tasks):
-            log.info(f"Running task: {func.__name__}")
-            # ToDo: if iscoroutine
-            coroutines = []
+        # this doesn't need to be a closure, like, probably slower?
+        async def task_runner(agent: RPCClient, tasks: list[FluxTask]) -> dict:
             length = len(tasks)
-            for agent in self.agents:
+            results = {}
+
+            for index, task in enumerate(tasks):
+                # first task connects, last task disconnects
+
+                if agent.transport.failed_on == NO_SOCKET:
+                    # log?
+                    break
+
+                if not task.func:
+                    continue
+
                 connect = False
                 disconnect = False
-                if index == 0:
+                if index == 0 and not agent.connected:
                     connect = True
-                if index + 1 == length:
+                if index + 1 == length and not stay_connected:
                     disconnect = True
-                t = asyncio.create_task(func(agent, connect, disconnect))
-                coroutines.append(t)
-            try:
-                await asyncio.gather(*coroutines)
-            except FluxVaultKeyError as e:
-                log.error(f"Exception from gather tasks: {repr(e)}")
-                if self.keeper.gui:
-                    await self.keeper.gui.set_toast(repr(e))
+
+                con_kwargs = {
+                    "connect": connect,
+                    "disconnect": disconnect,
+                }
+
+                res = await task.func(agent, *task.args, **task.kwargs, **con_kwargs)
+                results[task.func.__name__] = res
+
+            # agent.id is a tuple of app.name, ip, component_name
+            return {agent.id: results}
+
+        agents = []
+        for target, agent_tasks in targets.items():
+            if agent := self.get_agent_by_id(target):
+                agents.append((agent, agent_tasks))
+            else:
+                log.warn(f"Target {target} not found... nothing to do")
+
+        if not agents:
+            agents = [(x, tasks) for x in self.agents]
+
+        for agent, tasks in agents:
+            t = asyncio.create_task(task_runner(agent, tasks))
+            coroutines.append(t)
+
+        try:
+            results = await asyncio.gather(*coroutines)
+        except FluxVaultKeyError as e:
+            log.error(f"Exception from gather tasks: {repr(e)}")
+            if self.keeper.gui:
+                await self.keeper.gui.set_toast(repr(e))
 
         if self.keeper.gui:
             await self.keeper.gui.app_state_update(self.app.name, self.network_state)
+
+        results = list(filter(None, results))
+        results = reduce(lambda a, b: {**a, **b}, results)
+
+        return results
+
+    # async def run_agent_tasks(self, tasks: list[Callable] = []) -> list:
+    #     if not self.agents:
+    #         log.info("No agents found... nothing to do")
+    #         return
+
+    #     # headless mode
+    #     # ToDo: add cli `tasks` thingee
+    #     if not tasks:
+    #         tasks = [
+    #             self.sync_objects,
+    #             self.set_mode,
+    #             self.get_state,
+    #         ]
+    #     if self.app.app_mode != AppMode.FILESERVER:
+    #         tasks.insert(0, self.enroll_subordinates)
+
+    #     if self.app.app_mode == AppMode.FILESERVER:
+    #         tasks.insert(2, self.load_manifest)
+
+    #     # I think this breaks in certain situations. LIke it won't disconnect
+    #     for index, func in enumerate(tasks):
+    #         log.info(f"Running task: {func.__name__}")
+    #         # ToDo: if iscoroutine
+    #         coroutines = []
+    #         length = len(tasks)
+    #         for agent in self.agents:
+    #             connect = False
+    #             disconnect = False
+    #             if index == 0:
+    #                 connect = True
+    #             if index + 1 == length:
+    #                 disconnect = True
+    #             t = asyncio.create_task(func(agent, connect, disconnect))
+    #             coroutines.append(t)
+    #         try:
+    #             results = await asyncio.gather(*coroutines)
+    #         except FluxVaultKeyError as e:
+    #             log.error(f"Exception from gather tasks: {repr(e)}")
+    #             if self.keeper.gui:
+    #                 await self.keeper.gui.set_toast(repr(e))
+
+    #     if self.keeper.gui:
+    #         await self.keeper.gui.app_state_update(self.app.name, self.network_state)
+
+    #     return results
 
     def __getattr__(self, name: str) -> Callable:
         try:
@@ -937,6 +1056,8 @@ class FluxAppManager:
 
         if func.pass_context:
             context = FluxVaultContext(self.agents, self.keeper.ca)
+            name = func.__name__
             func = functools.partial(func, context)
+            func.__name__ = name
 
         return func

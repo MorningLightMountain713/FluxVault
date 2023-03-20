@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from ownca import CertificateAuthority
+from typing import Callable
 
 import dns.resolver
 import dns.reversename
 import keyring
 import randomname
+from fluxrpc.client import RPCClient
 from fluxrpc.auth import SignatureAuthProvider
 from fluxrpc.transports.socket.symbols import (
     AUTH_ADDRESS_REQUIRED,
@@ -27,12 +29,15 @@ from fluxvault.log import log
 def manage_transport(f):
     @functools.wraps(f)
     async def wrapper(*args, **kwargs):
-        # ToDO: brittle. Popping args feels hella dirty
-        func_args = list(args)
+        # Surely there is a better way
+        agent = None
+        for arg in args:
+            if isinstance(arg, RPCClient):
+                agent = arg
+                break
 
-        disconnect = func_args.pop()
-        connect = func_args.pop()
-        agent = func_args[-1]
+        disconnect = kwargs.pop("disconnect", True)
+        connect = kwargs.pop("connect", True)
 
         if connect:
             await agent.transport.connect()
@@ -45,6 +50,7 @@ def manage_transport(f):
                 return
 
             address = ""
+            # match/case
             if agent.transport.failed_on in [AUTH_ADDRESS_REQUIRED, AUTH_DENIED]:
                 address = "auth_address"
             elif agent.transport.failed_on in [
@@ -73,7 +79,9 @@ def manage_transport(f):
                 log.error("Cannot connect after retrying with authentication...")
                 return
 
-        res = await f(*func_args, **kwargs)
+        # print("wrapper args", args)
+        # print("wrapper kwargs", kwargs)
+        res = await f(*args, **kwargs)
 
         if disconnect:
             await agent.transport.disconnect()
@@ -94,6 +102,13 @@ class AppMode(Enum):
     SINGLE_COMPONENT = 2
     MULTI_COMPONENT = 3
     UNKNOWN = 4
+
+
+class ContainerState(Enum):
+    DEFAULT = "DEFAULT"
+    ERROR = "ERROR"
+    RUNNING = "RUNNING"
+    STOPPED = "STOPPED"
 
 
 def bytes_to_human(num, suffix="B"):
@@ -143,6 +158,18 @@ def size_of_object(path: Path) -> int:
     log.info(f"Syncing {obj_type} {path} of size { bytes_to_human(size)}")
 
     return size
+
+
+class AgentId(tuple):
+    ...
+
+
+@dataclass
+class FluxTask:
+    name: str
+    args: tuple = ()
+    kwargs: dict = field(default_factory=dict)
+    func: Callable | None = None
 
 
 @dataclass

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import binascii
 import importlib
-import io
 import os
 import pty
 import ssl
@@ -11,10 +10,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from enum import Enum
 
 import aiofiles
 import aioshutil
-import yaml
 from aiofiles import os as aiofiles_os
 from aiohttp import ClientSession
 from bitcoin.signmessage import BitcoinMessage, VerifyMessage
@@ -35,7 +34,12 @@ from rich.pretty import pprint
 
 from fluxvault.constants import STATE_SIG, WWW_ROOT, PLUGIN_DIR, SSL_DIR
 from fluxvault.extensions import FluxVaultExtensions
-from fluxvault.helpers import AppMode, bytes_to_human, get_app_and_component_name
+from fluxvault.helpers import (
+    AppMode,
+    ContainerState,
+    bytes_to_human,
+    get_app_and_component_name,
+)
 from fluxvault.log import log
 from fluxvault.registrar import FluxAgentRegistrar, FluxPrimaryAgent, FluxSubAgent
 
@@ -62,7 +66,6 @@ class FluxAgent:
         subordinate: bool = False,
         primary_agent: FluxPrimaryAgent | None = None,
     ):
-        # ToDo: look at using __async__ instead of run_until_complete
         self.enable_registrar = enable_registrar
         self.extensions = extensions
         self.loop = asyncio.get_event_loop()
@@ -79,6 +82,7 @@ class FluxAgent:
         self.component_name, self.app_name = get_app_and_component_name()
         self.file_handles: dict = {}
         self.app_mode = AppMode.UNKNOWN
+        self.container_state = ContainerState.DEFAULT
 
         log.info(f"Component name: {self.component_name}, App name: {self.app_name}")
 
@@ -86,6 +90,7 @@ class FluxAgent:
             # Must verify source address as a minimum
             self.verify_source_address = True
 
+        # remove all this run_until_complete garbage
         self.setup_registrar()
         self.auth_provider = self.loop.run_until_complete(self.get_auth_provider())
         self.loop.run_until_complete(self.validate_prior_state())
@@ -125,8 +130,10 @@ class FluxAgent:
             await self.sub_agent.register_with_primary_agent()
 
     def set_mode(self, mode: int):
-        mode = AppMode(mode)
-        match mode:
+        self.app_mode = AppMode(mode)
+        self.container_state = ContainerState.RUNNING
+
+        match self.app_mode:
             case AppMode.FILESERVER:
                 WWW_ROOT.mkdir(parents=True, exist_ok=True)
                 self.registrar.enable_services()
@@ -144,6 +151,8 @@ class FluxAgent:
 
     async def validate_prior_state(self):
         raw_state = None
+
+        # fix this all up, should only run for fileserer
 
         if not self.auth_provider:
             # we can only validate prior state if we have an auth provider
@@ -228,6 +237,7 @@ class FluxAgent:
         self.extensions.add_method(self.connect_shell)
         self.extensions.add_method(self.disconnect_shell)
         self.extensions.add_method(self.get_state)
+        self.extensions.add_method(self.get_container_state)
         self.extensions.add_method(self.get_directory_hashes)
         self.extensions.add_method(self.set_mode)
         self.extensions.add_method(self.load_manifest)
@@ -317,6 +327,10 @@ class FluxAgent:
     def get_methods(self) -> dict:
         """Returns methods available for the keeper to call"""
         return {k: v.__doc__ for k, v in self.extensions.method_map.items()}
+
+    def get_container_state(self) -> str:
+        # todo, sort out this serialization stuff
+        return self.container_state.value
 
     def get_state(self) -> dict:
         methods = self.get_methods()

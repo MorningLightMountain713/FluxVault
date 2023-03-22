@@ -296,6 +296,9 @@ class FluxKeeper:
         for app in self.apps:
             app.remove_catalogue()
 
+        for app in self.managed_apps:
+            app.cleanup()
+
     def get_app_manager_by_name(self, name: str) -> FluxAppManager:
         return next(filter(lambda x: x.app.name == name, self.managed_apps), None)
 
@@ -314,6 +317,7 @@ class FluxKeeper:
                 await asyncio.sleep(polling_interval)
 
         for app_manager in self.managed_apps:
+            await app_manager.start_polling_fluxnode_ips()
             tasks.append(asyncio.create_task(manage(app_manager)))
 
         await asyncio.gather(*tasks)
@@ -329,8 +333,12 @@ class FluxAppManager:
         self.app = app
         self.agents = []
         self.network_state = {}
+        self.fluxnode_sync_task: asyncio.Task | None = None
 
-        self.build_agents()
+        # This shouldn't be here, should be on the app
+        if not self.app.signing_key and self.app.sign_connections:
+            raise ValueError("Signing key must be provided if signing connections")
+
         self.register_extensions()
 
     def __iter__(self):
@@ -373,10 +381,26 @@ class FluxAppManager:
 
         return node_ips
 
+    async def start_polling_fluxnode_ips(self):
+        if not self.fluxnode_sync_task:
+            asyncio.create_task(self.build_agents())
+
+        while not self.agents:
+            await asyncio.sleep(0.1)
+
     def add(self, agent: RPCClient):
         self.agents.append(agent)
 
-    def get_agent_by_id(self, id: tuple):
+    def remove(self, ip: str):
+        # this whole thing sucks
+        # any cleanup required here? or just garbo?
+        self.agents = list(filter(lambda x: x.id[1] != ip, self.agents))
+
+    async def disconnect_agent_by_id(self, id: AgentId):
+        if agent := self.get_agent_by_id(id):
+            await agent.transport.disconnect()
+
+    def get_agent_by_id(self, id: AgentId):
         for agent in self.agents:
             if agent.id == id:
                 return agent
@@ -399,46 +423,66 @@ class FluxAppManager:
     def agent_ids(self) -> list:
         return [x.id for x in self.agents]
 
+    def agent_ips(self) -> set:
+        return set([x[1] for x in self.agent_ids()])
+
     def primary_agents(self) -> filter:
         # return [x for x in self.agents if not x.is_proxied]
         return list(filter(lambda x: not x.is_proxied, self.agents))
 
-    def build_agents(self):
+    def cleanup(self):
+        self.fluxnode_sync_task.cancel()
 
-        fluxnode_ips = (
-            self.app.fluxnode_ips
-            if self.app.fluxnode_ips
-            else self.keeper.loop.run_until_complete(
-                self.get_fluxnode_ips(self.app.name)
+    async def build_agents(self):
+        while True:
+            log.info("Fetching Fluxnode addresses...")
+            fluxnode_ips = (
+                self.app.fluxnode_ips
+                if self.app.fluxnode_ips
+                else await self.get_fluxnode_ips(self.app.name)
             )
-        )
 
-        if not self.app.signing_key and self.app.sign_connections:
-            raise ValueError("Signing key must be provided if signing connections")
+            fluxnode_ips = set(fluxnode_ips)
+            agent_ips = self.agent_ips()
 
-        auth_provider = None
-        if self.app.sign_connections and self.app.signing_key:
-            auth_provider = SignatureAuthProvider(key=self.app.signing_key)
+            missing = fluxnode_ips - agent_ips
+            extra = agent_ips - fluxnode_ips
 
-        # this seems pretty broken
-        if self.app.app_mode == AppMode.SINGLE_COMPONENT:
-            component_name = self.app.get_component().name
-        else:
-            component_name = "fluxagent"
+            for ip in extra:
+                self.remove(ip)
 
-        for ip in fluxnode_ips:
-            transport = EncryptedSocketClientTransport(
-                ip,
-                self.app.comms_port,
-                auth_provider=auth_provider,
-                proxy_target="",
-                on_pty_data_callback=self.keeper.gui.pty_output,
-                on_pty_closed_callback=self.keeper.gui.pty_closed,
-            )
-            flux_agent = RPCClient(
-                JSONRPCProtocol(), transport, (self.app.name, ip, component_name)
-            )
-            self.add(flux_agent)
+            # this is stupid too. Theyre all getting the same auth provider anyway,
+            # it only matters on the agent (they store stuff on the provider)
+            auth_provider = None
+            if self.app.sign_connections and self.app.signing_key:
+                auth_provider = SignatureAuthProvider(key=self.app.signing_key)
+
+            # this seems pretty broken
+            if self.app.app_mode == AppMode.SINGLE_COMPONENT:
+                component_name = self.app.get_component().name
+            else:
+                component_name = "fluxagent"
+
+            for ip in missing:
+                transport = EncryptedSocketClientTransport(
+                    ip,
+                    self.app.comms_port,
+                    auth_provider=auth_provider,
+                    proxy_target="",
+                    on_pty_data_callback=self.keeper.gui.pty_output,
+                    on_pty_closed_callback=self.keeper.gui.pty_closed,
+                )
+                flux_agent = RPCClient(
+                    JSONRPCProtocol(), transport, (self.app.name, ip, component_name)
+                )
+                self.add(flux_agent)
+                log.info(f"Agent {flux_agent.id} added...")
+
+            # if addresses were passed in, we don't need to loop
+            if self.app.fluxnode_ips:
+                break
+
+            await asyncio.sleep(60)
 
     def register_extensions(self):
         self.app.extensions.add_method(self.get_all_agents_methods)
@@ -935,7 +979,7 @@ class FluxAppManager:
             log.info("No agents found... nothing to do")
             return
 
-        if not tasks:
+        if not tasks and not targets:
             tasks = self.set_default_tasks()
 
         coroutines = []

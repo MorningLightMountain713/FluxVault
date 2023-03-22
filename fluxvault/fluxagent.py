@@ -130,6 +130,7 @@ class FluxAgent:
             await self.sub_agent.register_with_primary_agent()
 
     def set_mode(self, mode: int):
+        """Sets App mode and updates state to RUNNING"""
         self.app_mode = AppMode(mode)
         self.container_state = ContainerState.RUNNING
 

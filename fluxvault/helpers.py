@@ -109,6 +109,7 @@ class ContainerState(Enum):
     ERROR = "ERROR"
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
+    UNCONTACTABLE = "UNCONTACTABLE"
 
 
 def bytes_to_human(num, suffix="B"):

@@ -55,7 +55,7 @@ class FluxAgent:
         self,
         bind_address: str = "0.0.0.0",
         bind_port: int = 8888,
-        enable_registrar: bool = False,
+        disable_webserver: bool = False,
         registrar: FluxAgentRegistrar | None = None,
         extensions: FluxVaultExtensions = FluxVaultExtensions(),
         # working_dir: str = tempfile.gettempdir(),
@@ -66,7 +66,7 @@ class FluxAgent:
         subordinate: bool = False,
         primary_agent: FluxPrimaryAgent | None = None,
     ):
-        self.enable_registrar = enable_registrar
+        self.disable_webserver = disable_webserver
         self.extensions = extensions
         self.loop = asyncio.get_event_loop()
         self.auth_id = auth_id
@@ -258,7 +258,8 @@ class FluxAgent:
         return auth_provider
 
     def run(self):
-        self.loop.create_task(self.registrar.start_app())
+        if not self.disable_webserver:
+            self.loop.create_task(self.registrar.start_app())
 
         task = self.loop.create_task(self.rpc_server.serve_forever())
 
@@ -266,11 +267,11 @@ class FluxAgent:
             self.loop.run_forever()
         finally:
             task.cancel()
-            if self.enable_registrar:
+            if not self.disable_webserver:
                 self.loop.run_until_complete(self.registrar.cleanup())
 
     async def run_async(self):
-        if self.enable_registrar:
+        if not self.disable_webserver:
             self.loop.create_task(self.registrar.start_app())
             log.info(
                 f"Sub agent http server running on port {self.registrar.bind_port}"
@@ -342,7 +343,7 @@ class FluxAgent:
             "plugins": plugins,
             "component_name": self.component_name,
             "app_name": self.app_name,
-            "enable_registrar": self.enable_registrar,
+            "enable_registrar": self.disable_webserver,
             "auth_id": self.auth_id,
             # "working_dir": self.working_dir,
             "subordinate": self.subordinate,
@@ -541,7 +542,7 @@ class FluxAgent:
         return {
             # "working_dir": self.working_dir,
             "plugins": self.extensions.list_plugins(),
-            "registrar_enabled": self.enable_registrar,
+            "registrar_disabled": self.disable_webserver,
         }
 
     def enable_registrar_fileserver(self):

@@ -93,7 +93,11 @@ class FluxAgent:
         # remove all this run_until_complete garbage
         self.setup_registrar()
         self.auth_provider = self.loop.run_until_complete(self.get_auth_provider())
-        self.loop.run_until_complete(self.validate_prior_state())
+
+        # Review all this stuff
+        if self.app_mode in [AppMode.FILESERVER, AppMode.UNKNOWN]:
+            self.loop.run_until_complete(self.validate_prior_state())
+
         self.raise_on_state_errors()
         self.register_extensions()
 

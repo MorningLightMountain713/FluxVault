@@ -167,7 +167,7 @@ class FluxAgent:
             return
 
         if not WWW_ROOT.exists():
-            log.warn(
+            log.debug(
                 f"Fileserver root {WWW_ROOT} does not exist... waiting for Keeper to connect"
             )
             return

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fluxvault"
-version = "0.9.2"
+version = "0.9.3"
 description = "A system to load secrets into Flux applications"
 authors = ["David White <dr.white.nz@gmail.com>", "Tom Moulton <tom@moulton.us>"]
 license = "MIT"

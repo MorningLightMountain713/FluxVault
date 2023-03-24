@@ -353,6 +353,8 @@ class FluxAppManager:
         timeout = aiohttp.ClientTimeout(connect=10)
         retries = 3
 
+        data = {}
+
         # look at making session appwide
         async with aiohttp.ClientSession() as session:
             for n in range(retries):
@@ -371,7 +373,7 @@ class FluxAppManager:
                     continue
 
         node_ips = []
-        if data.get("status") == "success":
+        if data.get("status", None) == "success":
             nodes = data.get("data")
             for node in nodes:
                 ip = node["ip"].split(":")[0]
@@ -443,6 +445,12 @@ class FluxAppManager:
             )
 
             fluxnode_ips = set(fluxnode_ips)
+
+            if not fluxnode_ips:  # error fetching ips from api
+                # try again soon
+                await asyncio.sleep(30)
+                continue
+
             agent_ips = self.agent_ips()
 
             missing = fluxnode_ips - agent_ips
@@ -971,7 +979,7 @@ class FluxAppManager:
         tasks: list[FluxTask] = [],
         stay_connected: bool = False,
         targets: dict[AgentId, list[FluxTask]] = {},
-        async_tasks: bool = True,
+        async_tasks: bool = False,  # NotImplemented
     ) -> list:
         # async_tasks = run tasks async instead of current sync
         # probably not needed, but possible

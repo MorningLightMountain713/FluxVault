@@ -601,7 +601,7 @@ class FsEntryStateManager:
 
             if self.local_object_exists:
                 log.info(
-                    f"Agent remote object {self.name} with CRC {self.remote_crc} is different than local object with CRC {self.local_crc}... analyzing further"
+                    f"Remote object {self.name} CRC: {self.remote_crc} Local object CRC: {self.local_crc}... validating difference"
                 )
                 return
 

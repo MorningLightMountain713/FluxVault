@@ -25,9 +25,11 @@ class FluxKeeperGui:
     address: str
     port: int
     keeper: FluxKeeper
-    root_dir: Path = Path(".")
-    app: web.Application = web.Application()
-    sio: socketio.AsyncServer = socketio.AsyncServer(cors_allowed_origins="*")
+    root_dir: Path = field(default_factory=Path)
+    app: web.Application = field(default_factory=web.Application)
+    sio: socketio.AsyncServer = field(
+        default_factory=lambda: socketio.AsyncServer(cors_allowed_origins="*")
+    )
     namespace: str = "/pty"
 
     @staticmethod

@@ -129,8 +129,6 @@ def fetch_and_store_signing_key(signing_address: str, signing_key: str = "") -> 
             "Would you like to store your private key in your device's secure store?\n\n(macOS: keyring, Windows: Windows Credential Locker, Ubuntu: GNOME keyring.\n\n This means you won't need to enter your private key every time this program is run.",
         )
     if store_key:
-        print(type(signing_address))
-        print(type(signing_key))
         keyring.set_password("fluxvault_app", signing_address, signing_key)
 
     return signing_key

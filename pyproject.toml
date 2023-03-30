@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fluxvault"
-version = "0.9.11"
+version = "0.9.12"
 description = "A system to load secrets into Flux applications"
 authors = ["David White <dr.white.nz@gmail.com>", "Tom Moulton <tom@moulton.us>"]
 license = "MIT"
@@ -9,7 +9,7 @@ homepage = "https://runonflux.io"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-fluxrpc = {version = "^0.9.16", extras = ["socket"]}
+fluxrpc = {version = "^0.9.17", extras = ["socket"]}
 fluxwallet = "^0.0.6"
 requests = "^2.28.1"
 aiofiles = "^22.1.0"

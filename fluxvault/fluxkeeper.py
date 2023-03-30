@@ -80,7 +80,6 @@ class FluxKeeper:
         apps: FluxApp | None = None,
         # gui: bool = False,
     ):
-
         # ToDo: configurable port
         self.gui = FluxKeeperGui("127.0.0.1", 7777, self)
 
@@ -384,8 +383,9 @@ class FluxAppManager:
         return node_ips
 
     async def start_polling_fluxnode_ips(self):
+        """Idempotent polling of Fluxnodes"""
         if not self.fluxnode_sync_task:
-            asyncio.create_task(self.build_agents())
+            self.fluxnode_sync_task = asyncio.create_task(self.build_agents())
 
         while not self.agents:
             await asyncio.sleep(0.1)
@@ -599,7 +599,6 @@ class FluxAppManager:
         local_hashes: dict[str, int],
         remote_hashes: dict[str, int],
     ) -> tuple[list[Path], list[Path]]:
-
         candidates, missing, modified = self.get_missing_or_modified_objects(
             self.app.app_mode, managed_object, local_hashes, remote_hashes
         )

@@ -6,7 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, streamer, web
+import aiofiles
+from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, web
 
 from fluxvault.helpers import get_app_and_component_name
 from fluxvault.log import log
@@ -127,17 +128,16 @@ class FluxAgentRegistrar:
     def read_to_serve(self, value: bool):
         self._ready_to_serve = value
 
-    @streamer
-    async def file_sender(writer, file_path=None):
+    async def file_sender(file_path=None):
         """
         This function will read large file chunk by chunk and send it through HTTP
         without reading them into memory
         """
-        with open(file_path, "rb") as f:
-            chunk = f.read(2**16)
+        async with aiofiles.open(file_path, "rb") as f:
+            chunk = await f.read(64 * 1024)
             while chunk:
-                await writer.write(chunk)
-                chunk = f.read(2**16)
+                yield chunk
+                chunk = await f.read(64 * 1024)
 
     def enable_services(self):
         self.read_to_serve = True

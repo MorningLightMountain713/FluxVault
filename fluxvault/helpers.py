@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 from ownca import CertificateAuthority
 from typing import Callable
+import asyncio
 
 import dns.resolver
 import dns.reversename
@@ -81,7 +82,15 @@ def manage_transport(f):
 
         # print("wrapper args", args)
         # print("wrapper kwargs", kwargs)
-        res = await f(*args, **kwargs)
+
+        try:
+            res = await f(*args, **kwargs)
+        except asyncio.TimeoutError:
+            # Not sure about this
+            agent.transport.failed_on = NO_SOCKET
+            agent.transport.connected = False
+            res = None
+            log.error(f"Timeout error waiting for response from: {f.__name__}")
 
         if disconnect:
             await agent.transport.disconnect()

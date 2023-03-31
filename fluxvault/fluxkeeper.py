@@ -979,7 +979,7 @@ class FluxAppManager:
         stay_connected: bool = False,
         targets: dict[AgentId, list[FluxTask]] = {},
         async_tasks: bool = False,  # NotImplemented
-    ) -> list:
+    ) -> dict[tuple, dict]:
         # async_tasks = run tasks async instead of current sync
         # probably not needed, but possible
         if not self.agents:

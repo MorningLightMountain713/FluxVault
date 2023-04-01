@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from functools import reduce
 from pathlib import Path
 from typing import Callable
+import time
 
 import aiofiles
 
@@ -330,9 +331,11 @@ class FluxAppManager:
     ):
         self.keeper = keeper
         self.app = app
-        self.agents = []
+        self.agents: list[RPCClient] = []
         self.network_state = {}
+        # move to running tasks?
         self.fluxnode_sync_task: asyncio.Task | None = None
+        self.running_tasks: dict[tuple, list[asyncio.Task]] | None = None
 
         # This shouldn't be here, should be on the app
         if not self.app.signing_key and self.app.sign_connections:
@@ -885,6 +888,66 @@ class FluxAppManager:
         await proxy.install_cert(cert.cert_bytes)
         await proxy.install_ca_cert(self.keeper.ca.cert_bytes)
 
+    def ping_all_nodes(self, callback: Callable, interval: int = 1):
+        for agent in self.agents:
+            agent_tasks = self.running_tasks.get(agent.id)
+
+            ping_task = next(filter(lambda x: x.get_name() == "ping", agent_tasks))
+
+            if not ping_task:
+                t = asyncio.create_task(
+                    self.ping_pong(agent, interval=interval, callback=callback),
+                    name="ping",
+                )
+                if agent.id not in self.running_tasks:
+                    self.running_tasks[agent.id] = [t]
+                else:
+                    self.running_tasks[agent.id].append(t)
+
+    @manage_transport
+    async def ping_pong(self, agent: RPCClient, interval: int, callback: Callable):
+        """Ping node once every interval seconds. This interval includes the RTT of the ping,
+        if the RTT exceeds the interval, it is pinged again immediately. If the nodes
+        missed 3 pings (intervals) or doesn't respond with the correct PONG - the user provided
+        callback is called and we stop pinging"""
+        agent_proxy = agent.get_proxy()
+
+        async def ping_forever():
+            counter = 0
+            while True:
+                start = time.monotonic()
+                try:
+                    resp = await asyncio.wait_for(
+                        await agent_proxy.ping(), timeout=interval
+                    )
+                except asyncio.TimeoutError:
+                    if counter >= 2:  # 3 times
+                        this_task = next(
+                            filter(
+                                lambda x: x.get_name() == "ping",
+                                self.running_tasks[agent.id],
+                            )
+                        )
+
+                        self.running_tasks[agent.id].remove(this_task)
+                        callback(agent.id)
+                        this_task.cancel()
+
+                    else:
+                        counter += 1
+                        continue
+
+                if resp != "PONG":
+                    counter += 1
+                    continue
+
+                counter = 0
+                elapsed = time.monotonic() - start
+                to_sleep = 1 - elapsed
+                asyncio.sleep(max(0, to_sleep))
+
+        await ping_forever()
+
     @manage_transport
     async def set_mode(self, agent: RPCClient):
         agent_proxy = agent.get_proxy()
@@ -991,7 +1054,8 @@ class FluxAppManager:
 
         coroutines = []
 
-        # this doesn't need to be a closure, like, probably slower?
+        # this doesn't need to be a closure, like, probably slower? but feels
+        # good to encapsulate behaviour
         async def task_runner(agent: RPCClient, tasks: list[FluxTask]) -> dict:
             length = len(tasks)
             results = {}
@@ -1018,6 +1082,7 @@ class FluxAppManager:
                     "disconnect": disconnect,
                 }
 
+                # doesn't this mean you have to use @manage_transport???
                 res = await task.func(agent, *task.args, **task.kwargs, **con_kwargs)
                 results[task.func.__name__] = res
 

@@ -246,6 +246,7 @@ class FluxAgent:
         self.extensions.add_method(self.get_directory_hashes)
         self.extensions.add_method(self.set_mode)
         self.extensions.add_method(self.load_manifest)
+        self.extensions.add_method(self.ping)
         # self.extensions.add_method(self.enable_registrar_fileserver)
         # self.extensions.add_method(self.run_entrypoint)
 
@@ -681,6 +682,9 @@ class FluxAgent:
 
     async def upgrade_connection(self):
         self.rpc_server.transport.upgrade_socket()
+
+    async def ping(self) -> str:
+        return "PONG"
 
     async def install_ca_cert(self, cert_bytes: bytes):
         log.info("Installing CA cert")

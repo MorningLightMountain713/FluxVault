@@ -9,6 +9,8 @@ from pathlib import Path
 from ownca import CertificateAuthority
 from typing import Callable
 import asyncio
+import time
+from collections import deque
 
 import dns.resolver
 import dns.reversename
@@ -25,6 +27,109 @@ from fluxrpc.transports.socket.symbols import (
 )
 
 from fluxvault.log import log
+from rich.pretty import pprint
+
+
+async def handle_session(agent):
+    if agent.transport.session.started:
+        if not agent.transport.session.connection_attempted:
+            await agent.transport.session.start(connect=True)
+
+            if signing_address := agent.transport.session.signing_address:
+                signing_key = keyring.get_password("fluxvault_app", signing_address)
+
+                if not signing_key:
+                    log.error(f"Signing key required in keyring for {signing_address}")
+                    raise FluxVaultKeyError(
+                        f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
+                    )
+
+                await agent.transport.session.connect(signing_key)
+
+
+async def handle_connection(agent: RPCClient, connect: bool):
+    if connect:
+        await agent.transport.connect()
+
+    if not agent.transport.connected:
+        log.info("Transport not connected... checking connection requirements...")
+        log.info(f"Failed on {agent.transport.failed_on}")
+
+        if agent.transport.failed_on == NO_SOCKET:
+            return
+
+        address = ""
+        # match/case
+        if agent.transport.failed_on in [AUTH_ADDRESS_REQUIRED, AUTH_DENIED]:
+            address = "auth_address"
+        elif agent.transport.failed_on in [
+            PROXY_AUTH_ADDRESS_REQUIRED,
+            PROXY_AUTH_DENIED,
+        ]:
+            address = "proxy_auth_address"
+
+        signing_key = keyring.get_password(
+            "fluxvault_app", getattr(agent.transport, address)
+        )
+
+        if not signing_key:
+            log.error(
+                f"Signing key required in keyring for {getattr(agent.transport, address)}"
+            )
+            raise FluxVaultKeyError(
+                f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
+            )
+
+        auth_provider = SignatureAuthProvider(key=signing_key)
+        agent.transport.auth_provider = auth_provider
+        await agent.transport.connect()
+
+
+# def manage_session(f):
+#     @functools.wraps(f)
+#     async def wrapper(*args, **kwargs):
+#         # Surely there is a better way
+#         agent = None
+#         for arg in args:
+#             if isinstance(arg, RPCClient):
+#                 agent = arg
+#                 break
+
+#         if not agent:
+#             return
+
+#         if agent.transport.session.started:
+#             if not agent.transport.session.connection_attempted:
+#                 await agent.transport.session.start(connect=True)
+
+#                 if signing_address := agent.transport.session.signing_address:
+#                     signing_key = keyring.get_password("fluxvault_app", signing_address)
+
+#                     if not signing_key:
+#                         log.error(
+#                             f"Signing key required in keyring for {signing_address}"
+#                         )
+#                         raise FluxVaultKeyError(
+#                             f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
+#                         )
+
+#                     await agent.transport.session.connect(signing_key)
+
+#         # print("wrapper args", args)
+#         # print("wrapper kwargs", kwargs)
+
+#         # try:
+#         res = await f(*args, **kwargs)
+#         # except asyncio.TimeoutError:
+#         #     # Not sure about this
+#         #     agent.transport.failed_on = NO_SOCKET
+#         #     agent.transport.connected = False
+#         #     res = None
+#         #     log.error(f"Timeout error waiting for response from: {f.__name__}")
+
+#         return res
+
+#     return wrapper
 
 
 def manage_transport(f):
@@ -39,60 +144,24 @@ def manage_transport(f):
 
         disconnect = kwargs.pop("disconnect", True)
         connect = kwargs.pop("connect", True)
+        in_session = kwargs.pop("in_session", False)
 
-        if connect:
-            await agent.transport.connect()
+        print(
+            f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}"
+        )
+
+        if in_session:
+            await handle_session(agent)
+        else:
+            await handle_connection(agent, connect)
 
         if not agent.transport.connected:
-            log.info("Transport not connected... checking connection requirements...")
-            log.info(f"Failed on {agent.transport.failed_on}")
+            log.error("Connection failed... returning")
+            return
 
-            if agent.transport.failed_on == NO_SOCKET:
-                return
+        res = await f(*args, **kwargs)
 
-            address = ""
-            # match/case
-            if agent.transport.failed_on in [AUTH_ADDRESS_REQUIRED, AUTH_DENIED]:
-                address = "auth_address"
-            elif agent.transport.failed_on in [
-                PROXY_AUTH_ADDRESS_REQUIRED,
-                PROXY_AUTH_DENIED,
-            ]:
-                address = "proxy_auth_address"
-
-            signing_key = keyring.get_password(
-                "fluxvault_app", getattr(agent.transport, address)
-            )
-
-            if not signing_key:
-                log.error(
-                    f"Signing key required in keyring for {getattr(agent.transport, address)}"
-                )
-                raise FluxVaultKeyError(
-                    f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
-                )
-
-            auth_provider = SignatureAuthProvider(key=signing_key)
-            agent.transport.auth_provider = auth_provider
-            await agent.transport.connect()
-
-            if not agent.transport.connected:
-                log.error("Cannot connect after retrying with authentication...")
-                return
-
-        # print("wrapper args", args)
-        # print("wrapper kwargs", kwargs)
-
-        try:
-            res = await f(*args, **kwargs)
-        except asyncio.TimeoutError:
-            # Not sure about this
-            agent.transport.failed_on = NO_SOCKET
-            agent.transport.connected = False
-            res = None
-            log.error(f"Timeout error waiting for response from: {f.__name__}")
-
-        if disconnect:
+        if not in_session and disconnect:
             await agent.transport.disconnect()
 
         return res
@@ -172,6 +241,75 @@ def size_of_object(path: Path) -> int:
 
 class AgentId(tuple):
     ...
+
+
+class UnixTime(float):
+    ...
+
+
+@dataclass
+class StateTransition:
+    offline_to_online: bool
+    time: UnixTime = field(default_factory=time.time)
+
+
+@dataclass
+class NodeContactState:
+    first_contact: UnixTime = field(default_factory=time.time)
+    transitions: list[StateTransition] = field(default_factory=list)
+    in_quarantine: bool = False
+    quarantine_timer: UnixTime = 0
+    total_count: int = 0
+    total_missed_count: int = 0
+    misses: deque[float] = field(default_factory=lambda: deque([], maxlen=60))
+
+    @property
+    def active(self) -> bool:
+        if self.transitions:
+            return self.transitions[-1].offline_to_online
+        else:
+            return True
+
+    @property
+    def transition_count(self) -> int:
+        return len(self.transitions)
+
+    @property
+    def latest_transition(self) -> StateTransition | None:
+        if self.transitions:
+            return self.transitions[-1]
+
+    @property
+    def last_state_change_time(self) -> UnixTime:
+        return 0 if not self.transitions else self.latest_transition.time
+
+    @property
+    def one_minute_miss_count(self) -> int:
+        count = 0
+        one_minute_ago = time.time() - 60
+
+        for miss in reversed(self.misses):
+            if miss > one_minute_ago:
+                count += 1
+            else:
+                break
+
+        return count
+
+    def increment_counters(self):
+        self.total_missed_count += 1
+        self.misses.append(time.time())
+
+    def quarantine(self):
+        self.active = False
+        self.in_quarantine = True
+        self.quarantine_timer = time.perf_counter()
+
+    def dequarantine(self):
+        self.active = True
+        self.in_quarantine = False
+        self.quarantine_timer = 0
+        # self.transitions.append(StateTransition(True))
 
 
 @dataclass

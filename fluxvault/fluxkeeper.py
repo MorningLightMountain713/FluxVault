@@ -11,6 +11,8 @@ from functools import reduce
 from pathlib import Path
 from typing import Callable
 import time
+from contextlib import asynccontextmanager
+
 
 import aiofiles
 
@@ -27,7 +29,7 @@ from fluxrpc.client import RPCClient, RPCProxy
 from fluxrpc.exc import MethodNotFoundError
 from fluxrpc.protocols.jsonrpc import JSONRPCProtocol
 from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
-from fluxrpc.transports.socket.symbols import NO_SOCKET
+from fluxrpc.transports.socket.symbols import NO_SOCKET, PROXY_NO_SOCKET
 from ownca import CertificateAuthority
 from ownca.exceptions import OwnCAInvalidCertificate
 from rich.pretty import pprint
@@ -46,6 +48,8 @@ from fluxvault.fluxapp import (
 from fluxvault.fluxkeeper_gui import FluxKeeperGui
 from fluxvault.helpers import (
     AppMode,
+    NodeContactState,
+    StateTransition,
     FluxVaultKeyError,
     SyncStrategy,
     FluxVaultContext,
@@ -335,7 +339,8 @@ class FluxAppManager:
         self.network_state = {}
         # move to running tasks?
         self.fluxnode_sync_task: asyncio.Task | None = None
-        self.running_tasks: dict[tuple, list[asyncio.Task]] | None = None
+        self.running_tasks: dict[AgentId, list[asyncio.Task]] = {}
+        self.sessions: dict[AgentId, list] = {}
 
         # This shouldn't be here, should be on the app
         if not self.app.signing_key and self.app.sign_connections:
@@ -348,6 +353,19 @@ class FluxAppManager:
 
     def __len__(self):
         return len(self.agents)
+
+    @property
+    def agent_ids(self) -> list:
+        return [x.id for x in self.agents]
+
+    @property
+    def agent_ips(self) -> set:
+        return set([x[1] for x in self.agent_ids])
+
+    @property
+    def primary_agents(self) -> filter:
+        # return [x for x in self.agents if not x.is_proxied]
+        return list(filter(lambda x: not x.is_proxied, self.agents))
 
     @staticmethod
     async def get_fluxnode_ips(app_name: str) -> list:
@@ -384,6 +402,20 @@ class FluxAppManager:
             log.error("Return status from Flux api was not successful for agent IPs")
 
         return node_ips
+
+    def is_task_running_for_agent(self, agent_id: tuple, task_name: str) -> bool:
+        found = False
+        if agent_id in self.running_tasks:
+            found = bool(
+                next(
+                    filter(
+                        lambda x: x.get_name() == task_name,
+                        self.running_tasks[agent_id],
+                    ),
+                    False,
+                ),
+            )
+        return found
 
     async def start_polling_fluxnode_ips(self):
         """Idempotent polling of Fluxnodes"""
@@ -425,16 +457,6 @@ class FluxAppManager:
             if agent.is_proxied:
                 yield agent
 
-    def agent_ids(self) -> list:
-        return [x.id for x in self.agents]
-
-    def agent_ips(self) -> set:
-        return set([x[1] for x in self.agent_ids()])
-
-    def primary_agents(self) -> filter:
-        # return [x for x in self.agents if not x.is_proxied]
-        return list(filter(lambda x: not x.is_proxied, self.agents))
-
     def cleanup(self):
         self.fluxnode_sync_task.cancel()
 
@@ -450,14 +472,13 @@ class FluxAppManager:
             fluxnode_ips = set(fluxnode_ips)
 
             if not fluxnode_ips:  # error fetching ips from api
+                log.error("Error fetching Fluxnode IPs... trying again in 30s")
                 # try again soon
                 await asyncio.sleep(30)
                 continue
 
-            agent_ips = self.agent_ips()
-
-            missing = fluxnode_ips - agent_ips
-            extra = agent_ips - fluxnode_ips
+            missing = fluxnode_ips - self.agent_ips
+            extra = self.agent_ips - fluxnode_ips
 
             for ip in extra:
                 self.remove(ip)
@@ -474,20 +495,24 @@ class FluxAppManager:
             else:
                 component_name = "fluxagent"
 
-            for ip in missing:
-                transport = EncryptedSocketClientTransport(
-                    ip,
-                    self.app.comms_port,
-                    auth_provider=auth_provider,
-                    proxy_target="",
-                    on_pty_data_callback=self.keeper.gui.pty_output,
-                    on_pty_closed_callback=self.keeper.gui.pty_closed,
-                )
-                flux_agent = RPCClient(
-                    JSONRPCProtocol(), transport, (self.app.name, ip, component_name)
-                )
-                self.add(flux_agent)
-                log.info(f"Agent {flux_agent.id} added...")
+            try:
+                for ip in missing:
+                    agent_id = (self.app.name, ip, component_name)
+                    self.network_state[agent_id] = {}
+
+                    transport = EncryptedSocketClientTransport(
+                        ip,
+                        self.app.comms_port,
+                        auth_provider=auth_provider,
+                        proxy_target="",
+                        on_pty_data_callback=self.keeper.gui.pty_output,
+                        on_pty_closed_callback=self.keeper.gui.pty_closed,
+                    )
+                    flux_agent = RPCClient(JSONRPCProtocol(), transport, agent_id)
+                    self.add(flux_agent)
+                    log.info(f"Agent {flux_agent.id} added...")
+            except Exception as e:
+                print(repr(e))
 
             # if addresses were passed in, we don't need to loop
             if self.app.fluxnode_ips:
@@ -527,7 +552,7 @@ class FluxAppManager:
     @manage_transport
     async def get_state(self, agent: RPCClient):
         proxy = agent.get_proxy()
-        self.network_state.update({agent.id: await proxy.get_state()})
+        self.network_state[agent.id].update(await proxy.get_state())
 
     @staticmethod
     def get_extra_objects(
@@ -888,15 +913,33 @@ class FluxAppManager:
         await proxy.install_cert(cert.cert_bytes)
         await proxy.install_ca_cert(self.keeper.ca.cert_bytes)
 
-    def ping_all_nodes(self, callback: Callable, interval: int = 1):
-        for agent in self.agents:
-            agent_tasks = self.running_tasks.get(agent.id)
+    def get_task_state(self) -> dict:
+        all_agents = {k.id: [] for k in list(self.agents)}
+        all_tasks = {
+            k: [x.get_name() for x in v] for k, v in self.running_tasks.items()
+        }
+        all_agents.update(all_tasks)
+        # build data model for ping stuff
+        # this function should just add to network_state
 
-            ping_task = next(filter(lambda x: x.get_name() == "ping", agent_tasks))
+    def ping_all_nodes(
+        self, down_callback: Callable, up_callback: Callable, interval: int = 1
+    ):
+        for agent in self.agents:
+            agent_tasks = self.running_tasks.get(agent.id, [])
+
+            ping_task = next(
+                filter(lambda x: x.get_name() == "ping", agent_tasks), None
+            )
 
             if not ping_task:
                 t = asyncio.create_task(
-                    self.ping_pong(agent, interval=interval, callback=callback),
+                    self.ping_pong(
+                        agent,
+                        interval=interval,
+                        down_callback=down_callback,
+                        up_callback=up_callback,
+                    ),
                     name="ping",
                 )
                 if agent.id not in self.running_tasks:
@@ -905,48 +948,126 @@ class FluxAppManager:
                     self.running_tasks[agent.id].append(t)
 
     @manage_transport
-    async def ping_pong(self, agent: RPCClient, interval: int, callback: Callable):
+    async def ping_pong(
+        self,
+        agent: RPCClient,
+        interval: int,
+        down_callback: Callable,
+        up_callback: Callable,
+    ):
         """Ping node once every interval seconds. This interval includes the RTT of the ping,
         if the RTT exceeds the interval, it is pinged again immediately. If the nodes
         missed 3 pings (intervals) or doesn't respond with the correct PONG - the user provided
         callback is called and we stop pinging"""
+        # if we get here it means we've already connected, i.e. we're active
+        state = NodeContactState()
+        self.network_state[agent.id].update({"contact_state": state})
+
         agent_proxy = agent.get_proxy()
 
+        async def run_callback(callback) -> bool:
+            # this_task = next(
+            #     filter(
+            #         lambda x: x.get_name() == "ping",
+            #         self.running_tasks[agent.id],
+            #     )
+            # )
+
+            # self.running_tasks[agent.id].remove(this_task)
+
+            if asyncio.iscoroutinefunction(callback):
+                await callback(agent.id)
+            else:
+                callback(agent.id)
+
+            # this_task.cancel()
+
         async def ping_forever():
-            counter = 0
+            # logic
+            DOWN_NODE_INTERVAL = interval * 10
+            QUARANTINE_TIMER = 300
+            # if 3 missed in a row... you're out of here
+            # if 6 missed in a one minute period... you're out of here
+            consecutive_misses = 0
             while True:
-                start = time.monotonic()
+                # switch back to monotonic for those gainz
+                start = time.perf_counter()
                 try:
+                    # we need shield here, if we don't and we timeout, the task gets cancelled,
+                    # which stops the transport pulling the message off the queue; depending on where we
+                    # # hit the timeout. So we could have an extra
+                    # message in there, which gets returned immediately, making it look like the
+                    # elapsed time is very, very, short
+                    # However, what happens if we get 3 timeouts, do we need to cancel
+                    # the tasks
                     resp = await asyncio.wait_for(
-                        await agent_proxy.ping(), timeout=interval
+                        asyncio.shield(agent_proxy.ping()), timeout=interval
                     )
-                except asyncio.TimeoutError:
-                    if counter >= 2:  # 3 times
-                        this_task = next(
-                            filter(
-                                lambda x: x.get_name() == "ping",
-                                self.running_tasks[agent.id],
-                            )
-                        )
-
-                        self.running_tasks[agent.id].remove(this_task)
-                        callback(agent.id)
-                        this_task.cancel()
-
+                except asyncio.TimeoutError as e:
+                    consecutive_misses += 1
+                    log.error(f"Error pinging remote: {agent.id}. Error: {repr(e)}")
+                    if consecutive_misses >= 3 or state.one_minute_miss_count >= 6:
+                        if state.active:
+                            state.transitions.append(StateTransition(False))
+                            await run_callback(down_callback)
                     else:
-                        counter += 1
-                        continue
+                        state.increment_counters()
 
-                if resp != "PONG":
-                    counter += 1
-                    continue
+                except (ConnectionResetError, BrokenPipeError) as e:
+                    log.error(f"Agent: {agent.id} disconnected with E: {repr(e)}")
+                    state.increment_counters()
+                    consecutive_misses = 0
+                    await agent.transport.disconnect()
+                    if state.active:
+                        state.transitions.append(StateTransition(False))
+                        await run_callback(down_callback)
+                    try:
+                        await agent.transport.ensure_connected()
+                    except Exception as e:
+                        print("giraffe")
+                        print(repr(e))
 
-                counter = 0
-                elapsed = time.monotonic() - start
-                to_sleep = 1 - elapsed
-                asyncio.sleep(max(0, to_sleep))
+                except Exception as e:
+                    print(f"Exiting: {repr(e)}")
+                    exit(1)
+                else:
+                    consecutive_misses = 0
+                    if resp != "PONG":
+                        log.warning(f"Received incorrect ping response: {resp}")
+
+                    if not state.active and not state.in_quarantine:
+                        log.info(
+                            f"Node resumed... putting into quarantine for 300 seconds"
+                        )
+                        state.transitions.append(StateTransition(True))
+                        state.quarantine()
+
+                    elif state.in_quarantine:
+                        if (
+                            start - state.quarantine_timer > QUARANTINE_TIMER
+                            and state.one_minute_miss_count < 6
+                        ):
+                            log.info(f"Node has passed quarantine tests... reinstating")
+                            state.dequarantine()
+                            await run_callback(up_callback)
+                finally:
+                    state.total_count += 1
+                    elapsed = time.perf_counter() - start
+                    # if state.total_count % 10 == 0:
+                    #     print(
+                    #         f"{agent.id} count: {state.total_count} elapsed: {elapsed}"
+                    #     )
+
+                    if not state.active and not state.in_quarantine:
+                        timer = DOWN_NODE_INTERVAL
+                    else:
+                        timer = interval
+                    to_sleep = max(0, timer - elapsed)
+                    # print(f"To sleep: {to_sleep}")
+                    await asyncio.sleep(to_sleep)
 
         await ping_forever()
+        # pprint(asyncio.all_tasks())
 
     @manage_transport
     async def set_mode(self, agent: RPCClient):
@@ -1007,6 +1128,7 @@ class FluxAppManager:
         flux_agent = RPCClient(
             JSONRPCProtocol(), transport, (self.app.name, address, proxy_target)
         )
+        flux_agent.transport: EncryptedSocketClientTransport
 
         return flux_agent
 
@@ -1036,15 +1158,39 @@ class FluxAppManager:
 
         return FluxTask(name=name, args=args, kwargs=kwargs, func=func)
 
-    async def run_agents_async(
+    async def reachable_via_proxy(self, proxy_ip: str, target_ip: str) -> bool:
+        agent = self.create_agent(proxy_ip, target_ip)
+
+        await agent.transport.connect()
+
+        if not agent.transport.connected:
+            return False
+
+        await agent.transport.disconnect()
+
+        return True
+
+    @asynccontextmanager
+    async def agent_sessions(self, agents: list[tuple] = []):
+        agents = [self.get_agent_by_id(x) for x in agents]
+        agents = list(filter(None, agents))
+
+        agents = agents if agents else self.agents
+
+        for agent in agents:
+            await agent.transport.session.start()
+
+        yield
+
+        for agent in agents:
+            await agent.transport.session.end()
+
+    async def run_session_tasks(
         self,
         tasks: list[FluxTask] = [],
-        stay_connected: bool = False,
         targets: dict[AgentId, list[FluxTask]] = {},
-        async_tasks: bool = False,  # NotImplemented
     ) -> dict[tuple, dict]:
-        # async_tasks = run tasks async instead of current sync
-        # probably not needed, but possible
+
         if not self.agents:
             log.info("No agents found... nothing to do")
             return
@@ -1052,45 +1198,25 @@ class FluxAppManager:
         if not tasks and not targets:
             tasks = self.set_default_tasks()
 
+        con_kwargs = {"in_session": True}
         coroutines = []
 
-        # this doesn't need to be a closure, like, probably slower? but feels
-        # good to encapsulate behaviour
         async def task_runner(agent: RPCClient, tasks: list[FluxTask]) -> dict:
-            length = len(tasks)
             results = {}
 
-            for index, task in enumerate(tasks):
-                # first task connects, last task disconnects
-
-                if agent.transport.failed_on == NO_SOCKET:
-                    # log?
-                    break
-
+            for task in tasks:
                 if not task.func:
                     continue
 
-                connect = False
-                disconnect = False
-                if index == 0 and not agent.connected:
-                    connect = True
-                if index + 1 == length and not stay_connected:
-                    disconnect = True
-
-                con_kwargs = {
-                    "connect": connect,
-                    "disconnect": disconnect,
-                }
-
-                # doesn't this mean you have to use @manage_transport???
                 res = await task.func(agent, *task.args, **task.kwargs, **con_kwargs)
                 results[task.func.__name__] = res
 
-            # agent.id is a tuple of app.name, ip, component_name
             return {agent.id: results}
 
         agents = []
         for target, agent_tasks in targets.items():
+            # if not seesion.started ??? connect? Should a session encapsulate
+            # an agent?
             if agent := self.get_agent_by_id(target):
                 agents.append((agent, agent_tasks))
             else:
@@ -1118,51 +1244,96 @@ class FluxAppManager:
 
         return results
 
-    # async def run_agent_tasks(self, tasks: list[Callable] = []) -> list:
-    #     if not self.agents:
-    #         log.info("No agents found... nothing to do")
-    #         return
+    async def run_agents_async(
+        self,
+        tasks: list[FluxTask] = [],
+        stay_connected: bool = False,
+        already_connected: bool = False,
+        targets: dict[AgentId, list[FluxTask]] = {},
+        async_tasks: bool = False,  # NotImplemented
+    ) -> dict[tuple, dict]:
 
-    #     # headless mode
-    #     # ToDo: add cli `tasks` thingee
-    #     if not tasks:
-    #         tasks = [
-    #             self.sync_objects,
-    #             self.set_mode,
-    #             self.get_state,
-    #         ]
-    #     if self.app.app_mode != AppMode.FILESERVER:
-    #         tasks.insert(0, self.enroll_subordinates)
+        if not self.agents:
+            log.info("No agents found... nothing to do")
+            return
 
-    #     if self.app.app_mode == AppMode.FILESERVER:
-    #         tasks.insert(2, self.load_manifest)
+        if not tasks and not targets:
+            tasks = self.set_default_tasks()
 
-    #     # I think this breaks in certain situations. LIke it won't disconnect
-    #     for index, func in enumerate(tasks):
-    #         log.info(f"Running task: {func.__name__}")
-    #         # ToDo: if iscoroutine
-    #         coroutines = []
-    #         length = len(tasks)
-    #         for agent in self.agents:
-    #             connect = False
-    #             disconnect = False
-    #             if index == 0:
-    #                 connect = True
-    #             if index + 1 == length:
-    #                 disconnect = True
-    #             t = asyncio.create_task(func(agent, connect, disconnect))
-    #             coroutines.append(t)
-    #         try:
-    #             results = await asyncio.gather(*coroutines)
-    #         except FluxVaultKeyError as e:
-    #             log.error(f"Exception from gather tasks: {repr(e)}")
-    #             if self.keeper.gui:
-    #                 await self.keeper.gui.set_toast(repr(e))
+        coroutines = []
+        print("stay connected", stay_connected)
+        print("already connected", already_connected)
 
-    #     if self.keeper.gui:
-    #         await self.keeper.gui.app_state_update(self.app.name, self.network_state)
+        # use a session!
+        # this doesn't need to be a closure, like, probably slower? but feels
+        # good to encapsulate behaviour
+        async def task_runner(agent: RPCClient, tasks: list[FluxTask]) -> dict:
+            length = len(tasks)
+            results = {}
 
-    #     return results
+            for index, task in enumerate(tasks):
+                # first task connects, last task disconnects
+
+                if agent.transport.failed_on == NO_SOCKET:
+                    # this is super dirty
+                    agent.transport.failed_on = ""
+                    # means we skip all tasks in this run but can then run
+                    # again next time
+                    break
+
+                if not task.func:
+                    continue
+
+                connect = False
+                disconnect = False
+                if index == 0 and not already_connected:
+                    connect = True
+                if index + 1 == length and not stay_connected:
+                    disconnect = True
+
+                con_kwargs = {
+                    "connect": connect,
+                    "disconnect": disconnect,
+                    "in_session": False,
+                }
+
+                # doesn't this mean you have to use @manage_transport???
+                res = await task.func(agent, *task.args, **task.kwargs, **con_kwargs)
+                results[task.func.__name__] = res
+
+            # agent.id is a tuple of app.name, ip, component_name
+            return {agent.id: results}
+
+        agents = []
+        for target, agent_tasks in targets.items():
+            # if not seesion.started ??? connect? Should a session encapsulate
+            # an agent?
+            if agent := self.get_agent_by_id(target):
+                agents.append((agent, agent_tasks))
+            else:
+                log.warn(f"Target {target} not found... nothing to do")
+
+        if not agents:
+            agents = [(x, tasks) for x in self.agents]
+
+        for agent, tasks in agents:
+            t = asyncio.create_task(task_runner(agent, tasks))
+            coroutines.append(t)
+
+        try:
+            results = await asyncio.gather(*coroutines)
+        except FluxVaultKeyError as e:
+            log.error(f"Exception from gather tasks: {repr(e)}")
+            if self.keeper.gui:
+                await self.keeper.gui.set_toast(repr(e))
+
+        if self.keeper.gui:
+            await self.keeper.gui.app_state_update(self.app.name, self.network_state)
+
+        results = list(filter(None, results))
+        results = reduce(lambda a, b: {**a, **b}, results)
+
+        return results
 
     def __getattr__(self, name: str) -> Callable:
         try:

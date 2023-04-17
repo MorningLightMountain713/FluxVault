@@ -11,6 +11,13 @@ from typing import Callable
 import asyncio
 import time
 from collections import deque
+import statistics
+import math
+import itertools
+from rich.pretty import pretty_repr
+from copy import copy
+
+from rich.align import Align
 
 import dns.resolver
 import dns.reversename
@@ -147,7 +154,7 @@ def manage_transport(f):
         in_session = kwargs.pop("in_session", False)
 
         print(
-            f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}"
+            f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session}"
         )
 
         if in_session:
@@ -247,6 +254,86 @@ class UnixTime(float):
     ...
 
 
+class SymbolDeque(deque):
+    def __init__(self, symbols: list = ["\U0001F7E9", "\U0001F7E5"]):
+        self.update_symbols(symbols)
+
+    def update_symbols(self, symbols: list):
+        # meh, IndexOutOfRange
+        self.positive = symbols[0]
+        self.negative = symbols[1]
+
+    def append(self, item):
+        if item:
+            super(SymbolDeque, self).append(self.positive)
+        else:
+            super(SymbolDeque, self).append(self.negative)
+
+
+@dataclass
+class HitCounter:
+    raw: deque[bool] = field(default_factory=lambda: deque([], maxlen=60))
+    one_minute: deque[bool] = field(default_factory=lambda: deque([], maxlen=15))
+    fifteen_minute: deque[bool] = field(default_factory=lambda: deque([], maxlen=15))
+    one_hour: deque[bool] = field(default_factory=lambda: deque([], maxlen=15))
+    last_update: UnixTime = 0
+    counter: int = 0
+
+    # def __repr__(self):
+    #     me = self.__dict__.copy()
+    #     del me["raw"]
+    #     return pretty_repr(me)
+
+    def update(self, hit: bool):
+
+        changed = False
+        self.counter += 1
+        raw_copy = copy(self.raw)
+        self.raw.append(hit)
+
+        if raw_copy != self.raw:
+            changed = True
+
+        if self.counter % (60 * 1) == 0:
+            one_min_copy = copy(self.one_minute)
+            self.one_minute.append(all(self.raw))
+            if one_min_copy != self.one_minute:
+                changed = True
+
+        if self.counter % (60 * 15) == 0:
+            fifteen_min_copy = copy(self.fifteen_minute)
+            self.fifteen_minute.append(all(self.one_minute))
+            if fifteen_min_copy != self.fifteen_minute:
+                changed = True
+
+        if self.counter % (60 * 60) == 0:
+            one_hour_copy = copy(self.fifteen_minute)
+            self.one_hour.append(all(self.fifteen_minute))
+            if one_hour_copy != self.one_hour:
+                changed = True
+
+            self.counter = 0
+
+        if changed:
+            self.last_update = time.monotonic()
+
+
+@dataclass
+class RTT(tuple):
+    raw: deque[float] = field(default_factory=lambda: deque([], maxlen=60))
+    one_minute: deque[float] = field(default_factory=lambda: deque([], maxlen=15))
+    fifteen_minute: deque[float] = field(default_factory=lambda: deque([], maxlen=4))
+    one_hour: deque[float] = field(default_factory=lambda: deque([], maxlen=24))
+    low: float = 0
+    high: float = 0
+    average: float = 0
+
+    def __repr__(self):
+        me = self.__dict__.copy()
+        del me["raw"]
+        return pretty_repr(me)
+
+
 @dataclass
 class StateTransition:
     offline_to_online: bool
@@ -261,6 +348,8 @@ class NodeContactState:
     quarantine_timer: UnixTime = 0
     total_count: int = 0
     total_missed_count: int = 0
+    rtt: RTT = field(default_factory=RTT)
+    hit_counter: HitCounter = field(default_factory=HitCounter)
     misses: deque[float] = field(default_factory=lambda: deque([], maxlen=60))
 
     @property
@@ -296,20 +385,69 @@ class NodeContactState:
 
         return count
 
+    # def hit_counter(self) -> list[bool]:
+    #     interval = time.time() - 60
+    #     heartbeat = [True] * 60
+    #     for miss in reversed(self.misses):
+    #         if miss > interval:
+    #             in_second = miss - interval
+    #             in_second = math.floor(in_second)
+    #             heartbeat[in_second] = False
+    #         else:
+    #             break
+
+    #     return heartbeat
+
     def increment_counters(self):
         self.total_missed_count += 1
         self.misses.append(time.time())
 
     def quarantine(self):
-        self.active = False
         self.in_quarantine = True
         self.quarantine_timer = time.perf_counter()
 
     def dequarantine(self):
-        self.active = True
         self.in_quarantine = False
         self.quarantine_timer = 0
-        # self.transitions.append(StateTransition(True))
+
+    def update_hit_counter(self, hit: bool):
+        self.hit_counter.update(hit)
+
+    def update_rtt(self, rtt: float):
+        rtt = round(rtt, 3)
+        self.rtt.raw.append(rtt)
+
+        if self.total_count == 0:
+            return
+
+        if self.total_count % (60 * 1) == 0:
+            one_min_average = statistics.mean(self.rtt.raw)
+            self.rtt.one_minute.append(round(one_min_average, 3))
+
+        if self.total_count % (60 * 15) == 0:
+            fifteen_min_average = statistics.mean(self.rtt.one_minute)
+            self.rtt.fifteen_minute.append(round(fifteen_min_average, 3))
+
+        if self.total_count % (60 * 60) == 0:
+            one_hour_average = statistics.mean(self.rtt.fifteen_minute)
+            self.rtt.one_hour.append(round(one_hour_average, 3))
+
+        rtt_count = self.total_count - self.total_missed_count
+
+        # average block
+        if self.rtt.average == 0:
+            self.rtt.average = rtt
+        else:
+            rtt_total = rtt_count * self.rtt.average
+            rtt_total + rtt
+            self.rtt_average = round(rtt_total / rtt, 3)
+
+        # high / low block
+        if self.rtt.low == 0 or rtt < self.rtt.low:
+            self.rtt.low = rtt
+
+        elif rtt > self.rtt.high:
+            self.rtt.high = rtt
 
 
 @dataclass

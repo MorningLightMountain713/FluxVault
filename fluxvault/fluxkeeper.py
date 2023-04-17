@@ -13,7 +13,7 @@ from typing import Callable
 import time
 from contextlib import asynccontextmanager
 
-
+import itertools
 import aiofiles
 
 # 3rd party
@@ -32,7 +32,8 @@ from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
 from fluxrpc.transports.socket.symbols import NO_SOCKET, PROXY_NO_SOCKET
 from ownca import CertificateAuthority
 from ownca.exceptions import OwnCAInvalidCertificate
-from rich.pretty import pprint
+from rich.pretty import pprint, pretty_repr
+from rich.align import Align
 
 # this package
 from fluxvault.app_init import setup_filesystem_and_wallet
@@ -55,6 +56,8 @@ from fluxvault.helpers import (
     FluxVaultContext,
     FluxTask,
     AgentId,
+    HitCounter,
+    UnixTime,
     bytes_to_human,
     manage_transport,
 )
@@ -337,6 +340,9 @@ class FluxAppManager:
         self.app = app
         self.agents: list[RPCClient] = []
         self.network_state = {}
+        # make network_state proper object and move last_row_build_somewhere there
+        self.last_row_build: UnixTime = 0
+        self.table_rows: list[str] = []
         # move to running tasks?
         self.fluxnode_sync_task: asyncio.Task | None = None
         self.running_tasks: dict[AgentId, list[asyncio.Task]] = {}
@@ -403,6 +409,146 @@ class FluxAppManager:
 
         return node_ips
 
+    @staticmethod
+    def pad_to_width(target: list, width: int) -> Align:
+        """Convience function to pre-pad a list of strings
+        before passing to rich Align"""
+
+        length = len(target)
+
+        if length < width:
+            target_filler = ["  "] * (width - length)
+            target = [*target, *target_filler]
+
+        return Align.center("".join(target))
+
+    @staticmethod
+    def add_symbol_to_list(
+        subject: bool,
+        target: list,
+        insert_loc: int | None = None,
+        colors: str = "red_green",
+    ):
+        """Append or insert different box colors based on truthiness"""
+        green_box = "\U0001F7E9"  # True
+        red_box = "\U0001F7E5"  # False
+        yellow_box = "\U0001F7E8"  # True
+        blue_box = "\U0001F7E6"  # False
+
+        if colors == "red_green":
+            output = green_box if subject else red_box
+
+        elif colors == "blue_yellow":
+            output = yellow_box if subject else blue_box
+        else:
+            output = "XX"
+
+        # was getting false negatives with int
+        if isinstance(insert_loc, int):
+            target.insert(insert_loc, output)
+        else:
+            target.append(output)
+
+    #   MODIFY APPEND METHOD FOR TRUE FALSE TO ADD SYMBOLS BINARY DEQUE (2 OPTIONS)
+
+    def get_hit_counters(self) -> dict[str, HitCounter]:
+        contact_states: dict[str, NodeContactState] = {
+            k[1]: v.get("contact_state") for k, v in self.network_state.items()
+        }
+
+        return {k: v.hit_counter for k, v in contact_states.items() if v}
+
+    def cache_or_build_table_rows(self, use_cache: bool) -> list:
+        if not use_cache:
+            return self.build_table_rows()
+        else:
+            hit_counters = self.get_hit_counters()
+
+            latest = max(hit_counters.values(), key=lambda x: x.last_update, default=0)
+            if latest:
+                latest = latest.last_update
+
+            if latest > self.last_row_build:
+                self.last_row_build = latest
+                return self.build_table_rows()
+            else:
+                return self.table_rows
+
+    def build_table_rows(self) -> list:
+        rows = []
+
+        width = 15
+        for target, hit_counter in self.get_hit_counters().items():
+            one_sec_column = []
+            one_min_column = []
+            fifteen_min_column = []
+            one_hour_column = []
+
+            for ping in list(reversed(hit_counter.one_minute)):
+                self.add_symbol_to_list(ping, one_min_column)
+
+            for ping in list(reversed(hit_counter.fifteen_minute)):
+                self.add_symbol_to_list(ping, fifteen_min_column)
+
+            for ping in list(reversed(hit_counter.one_hour)):
+                self.add_symbol_to_list(ping, one_hour_column)
+
+            length = len(hit_counter.raw)
+            match length // width:
+                case x if x >= width:
+                    four_sec_blocks = width
+                    one_sec_blocks = 0
+                case x if x < width:
+                    if length <= width:
+                        four_sec_blocks = 0
+                        one_sec_blocks = width
+                    else:
+                        extra = length - width
+                        # we have to also take into the account the realestate we loose
+                        # from converting a one column to a 4 column. The net gain is 3
+                        four_sec_blocks = extra // 3
+                        if extra % 3 != 0:
+                            four_sec_blocks += 1
+
+                        one_sec_blocks = width - four_sec_blocks
+
+            if not four_sec_blocks:
+                for ping in reversed(hit_counter.raw):
+                    self.add_symbol_to_list(ping, one_sec_column, colors="blue_yellow")
+            else:
+                fifo_pings = list(reversed(hit_counter.raw))
+                # get the newest first
+                for ping in fifo_pings[0:one_sec_blocks]:
+                    self.add_symbol_to_list(ping, one_sec_column, colors="blue_yellow")
+
+                # aggregate the one sec blocks to four sec blocks
+                for i in range(four_sec_blocks):
+                    # these are the oldest first
+                    start = i * 4
+                    blocks = list(itertools.islice(hit_counter.raw, start, start + 4))
+                    last_4: bool = all(blocks)
+
+                    self.add_symbol_to_list(last_4, one_sec_column, one_sec_blocks)
+
+            rows.append(
+                [
+                    target,
+                    self.pad_to_width(one_sec_column, width),
+                    self.pad_to_width(one_min_column, width),
+                    self.pad_to_width(fifteen_min_column, width),
+                    self.pad_to_width(one_hour_column, width),
+                ]
+            )
+        # cache
+        self.table_rows = rows
+        return rows
+
+    def cancel_and_delete_tasks(self, agent_id: tuple):
+        for task in self.running_tasks[agent_id]:
+            task.cancel()
+
+        del self.running_tasks[agent_id]
+
     def is_task_running_for_agent(self, agent_id: tuple, task_name: str) -> bool:
         found = False
         if agent_id in self.running_tasks:
@@ -429,9 +575,15 @@ class FluxAppManager:
         self.agents.append(agent)
 
     def remove(self, ip: str):
-        # this whole thing sucks
-        # any cleanup required here? or just garbo?
-        self.agents = list(filter(lambda x: x.id[1] != ip, self.agents))
+        remaining = []
+        # there should only ever be one app running on a host
+        for agent in self.agents:
+            if agent.id[1] == ip:
+                self.cancel_and_delete_tasks(agent.id)
+            else:
+                remaining.append(agent)
+
+        self.agents = remaining
 
     async def disconnect_agent_by_id(self, id: AgentId):
         if agent := self.get_agent_by_id(id):
@@ -810,7 +962,10 @@ class FluxAppManager:
 
         agent_proxy = agent.get_proxy()
 
+        start = time.monotonic()
         remote_fs_objects = await agent_proxy.get_all_object_hashes(remote_paths)
+        elapsed = time.monotonic() - start
+        log.info(f"Time to get hashes: {round(elapsed, 4)}")
 
         log.debug(f"Agent {agent.id} remote file CRCs: {remote_fs_objects}")
 
@@ -871,9 +1026,12 @@ class FluxAppManager:
 
             if not managed_object.in_sync and managed_object.concrete_fs.storable:
                 # so here we need to figure any children dirs and set them manually to in_sync
+                start = time.monotonic()
                 fixed = await self.resolve_directory_state(
                     component, managed_object, agent_proxy
                 )
+                elapsed = time.monotonic() - start
+                log.info(f"Time to resolve state: {round(elapsed, 4)}")
                 fixed_objects.extend(fixed)
 
             if not managed_object.in_sync and not managed_object.concrete_fs.storable:
@@ -1004,12 +1162,26 @@ class FluxAppManager:
                         asyncio.shield(agent_proxy.ping()), timeout=interval
                     )
                 except asyncio.TimeoutError as e:
+                    state.update_hit_counter(False)
                     consecutive_misses += 1
-                    log.error(f"Error pinging remote: {agent.id}. Error: {repr(e)}")
-                    if consecutive_misses >= 3 or state.one_minute_miss_count >= 6:
+                    log.error(
+                        f"Error pinging remote: {agent.id}. Consecutive_misses: {consecutive_misses}. Error: {repr(e)}"
+                    )
+                    if consecutive_misses >= 10:
+                        consecutive_misses = 0
+                        await agent.transport.disconnect()
+                        try:
+                            await agent.transport.ensure_connected()
+                        except Exception as e:
+                            print("orangutan")
+                            print(repr(e))
+                        continue
+
+                    elif consecutive_misses >= 4 or state.one_minute_miss_count >= 8:
                         if state.active:
                             state.transitions.append(StateTransition(False))
                             await run_callback(down_callback)
+
                     else:
                         state.increment_counters()
 
@@ -1031,6 +1203,13 @@ class FluxAppManager:
                     print(f"Exiting: {repr(e)}")
                     exit(1)
                 else:
+                    rtt = time.monotonic() - start
+                    try:
+                        state.update_rtt(rtt)
+                        state.update_hit_counter(True)
+                    except Exception as e:
+                        print(repr(e))
+
                     consecutive_misses = 0
                     if resp != "PONG":
                         log.warning(f"Received incorrect ping response: {resp}")
@@ -1225,6 +1404,8 @@ class FluxAppManager:
         if not agents:
             agents = [(x, tasks) for x in self.agents]
 
+        # log.info(f"Agent session tasks: {pretty_repr(agents)}")
+
         for agent, tasks in agents:
             t = asyncio.create_task(task_runner(agent, tasks))
             coroutines.append(t)
@@ -1264,9 +1445,6 @@ class FluxAppManager:
         print("stay connected", stay_connected)
         print("already connected", already_connected)
 
-        # use a session!
-        # this doesn't need to be a closure, like, probably slower? but feels
-        # good to encapsulate behaviour
         async def task_runner(agent: RPCClient, tasks: list[FluxTask]) -> dict:
             length = len(tasks)
             results = {}
@@ -1303,6 +1481,8 @@ class FluxAppManager:
 
             # agent.id is a tuple of app.name, ip, component_name
             return {agent.id: results}
+
+        log.info(f"Agent session tasks: {pretty_repr(targets)}")
 
         agents = []
         for target, agent_tasks in targets.items():

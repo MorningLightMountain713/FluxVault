@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import BinaryIO, Generator
+import time
+import asyncio
 
 import aiofiles
 
@@ -102,6 +104,36 @@ FORMATS: dict[str, Callable] = {
 
 
 @dataclass
+class CrcCacheItem:
+    crc: int
+    last_update: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class CrcCache:
+    cache_items: dict[str, CrcCacheItem] = field(default_factory=dict)
+
+    def get(self, name) -> int | None:
+        if cache_item := self.cache_items.get(name):
+            return cache_item.crc
+
+    async def add(self, name, crc):
+        self.cache_items[name] = CrcCacheItem(crc)
+        # should be storing this somewhere
+        asyncio.create_task(self.wait_and_remove(40, name))
+
+    async def wait_and_remove(self, timeout, name):
+        await asyncio.sleep(timeout)
+        self.remove(name)
+
+    def remove(self, name):
+        try:
+            del self.cache_items[name]
+        except ValueError:
+            pass
+
+
+@dataclass
 class ConcreteFsEntry:
     path: Path
     parent: ConcreteFsEntry | None = None
@@ -112,6 +144,7 @@ class ConcreteFsEntry:
     fs_type: FsType = FsType.UNKNOWN
     size: int = 0
     fh: BinaryIO | None = None
+    crc_cache: CrcCache = field(default_factory=CrcCache)
 
     def __str__(self):
         """"""
@@ -418,15 +451,24 @@ class ConcreteFsEntry:
     ### CRC OPERATIONS
 
     def crc_file(self, filename: Path, crc: int) -> int:
+        if cache_crc := self.crc_cache.get(str(filename)):
+            return cache_crc
+
         crc = binascii.crc32(filename.name.encode(), crc)
 
         with open(filename, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 128), b""):
                 crc = binascii.crc32(chunk, crc)
 
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.crc_cache.add(str(filename), crc))
+
         return crc
 
     def crc_directory(self, directory: Path, crc: int, name: str = "") -> int:
+        if cache_crc := self.crc_cache.get(str(directory)):
+            return cache_crc
+
         dir_name = name if name else directory.name
         crc = binascii.crc32(dir_name.encode(), crc)
 
@@ -437,6 +479,10 @@ class ConcreteFsEntry:
                 crc = self.crc_file(path, crc)
             elif path.is_dir():
                 crc = self.crc_directory(path, crc)
+
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.crc_cache.add(str(directory), crc))
+
         return crc
 
     def crc32(self, name: str = "") -> int:

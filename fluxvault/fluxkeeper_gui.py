@@ -5,6 +5,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 import socketio
+import time
 
 # this is to prevent circular import from type checking an init
 if TYPE_CHECKING:
@@ -120,8 +121,10 @@ class FluxKeeperGui:
         await transport.send_pty_resize_message(data["rows"], data["cols"])
 
     async def app_state_update(self, app_name, state):
+        start = time.monotonic()
         log.info("Sending network state update to browser")
         await self.sio.emit("app_state", {app_name: state}, namespace="/pty")
+        log.info(f"Time to send sio update: {time.monotonic() - start}")
 
     async def start_keeper(self, *args, **kwargs):
         pass

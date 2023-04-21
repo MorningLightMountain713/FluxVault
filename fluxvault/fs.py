@@ -435,7 +435,8 @@ class ConcreteFsEntry:
 
     async def read(self, chunk_size: int | None = None) -> bytes:
         f"""Reads underlying file if entry is under {bytes_to_human(BUFFERSIZE)}, or
-        reads up to chunk_size bytes. Uses a generator so file bytes aren't stored in buffer."""
+        reads up to chunk_size bytes. Uses a generator so file bytes aren't stored in buffer.
+        """
         if chunk_size == None:  # reading until eof
             if self.size > BUFFERSIZE:
                 raise FileTooLargeError(str(self.path))
@@ -451,8 +452,8 @@ class ConcreteFsEntry:
     ### CRC OPERATIONS
 
     def crc_file(self, filename: Path, crc: int) -> int:
-        if cache_crc := self.crc_cache.get(str(filename)):
-            return cache_crc
+        # if cache_crc := self.crc_cache.get(str(filename)):
+        #     return cache_crc
 
         crc = binascii.crc32(filename.name.encode(), crc)
 
@@ -460,14 +461,14 @@ class ConcreteFsEntry:
             for chunk in iter(lambda: f.read(1024 * 128), b""):
                 crc = binascii.crc32(chunk, crc)
 
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.crc_cache.add(str(filename), crc))
+        # loop = asyncio.get_event_loop()
+        # loop.run_until_complete(self.crc_cache.add(str(filename), crc))
 
         return crc
 
     def crc_directory(self, directory: Path, crc: int, name: str = "") -> int:
-        if cache_crc := self.crc_cache.get(str(directory)):
-            return cache_crc
+        # if cache_crc := self.crc_cache.get(str(directory)):
+        #     return cache_crc
 
         dir_name = name if name else directory.name
         crc = binascii.crc32(dir_name.encode(), crc)
@@ -480,8 +481,8 @@ class ConcreteFsEntry:
             elif path.is_dir():
                 crc = self.crc_directory(path, crc)
 
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.crc_cache.add(str(directory), crc))
+        # loop = asyncio.get_event_loop()
+        # loop.run_until_complete(self.crc_cache.add(str(directory), crc))
 
         return crc
 
@@ -646,9 +647,9 @@ class FsEntryStateManager:
                 return
 
             if self.local_object_exists:
-                log.info(
-                    f"Remote object {self.name} CRC: {self.remote_crc} Local object CRC: {self.local_crc}... validating difference"
-                )
+                # log.info(
+                #     f"Remote object {self.name} CRC: {self.remote_crc} Local object CRC: {self.local_crc}... validating difference"
+                # )
                 return
 
         if self.remote_crc == self.local_crc:

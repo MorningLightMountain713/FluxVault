@@ -54,9 +54,13 @@ async def handle_session(agent):
                 await agent.transport.session.connect(signing_key)
 
 
-async def handle_connection(agent: RPCClient, connect: bool):
+async def handle_connection(agent: RPCClient, connect: bool, exclusive: bool = False):
     if connect:
-        await agent.transport.connect()
+        await agent.transport.connect(
+            exclusive=exclusive
+        )  # this gives us exclusive use of channel
+        if agent.transport.connected:
+            return
 
     if not agent.transport.connected:
         log.info("Transport not connected... checking connection requirements...")
@@ -89,7 +93,7 @@ async def handle_connection(agent: RPCClient, connect: bool):
 
         auth_provider = SignatureAuthProvider(key=signing_key)
         agent.transport.auth_provider = auth_provider
-        await agent.transport.connect()
+        await agent.transport.connect(exclusive=True)
 
 
 # def manage_session(f):
@@ -139,41 +143,51 @@ async def handle_connection(agent: RPCClient, connect: bool):
 #     return wrapper
 
 
-def manage_transport(f):
-    @functools.wraps(f)
-    async def wrapper(*args, **kwargs):
-        # Surely there is a better way
-        agent = None
-        for arg in args:
-            if isinstance(arg, RPCClient):
-                agent = arg
-                break
+def manage_transport(f=None, exclusive: bool = False):
+    def inner(f):
+        @functools.wraps(f)
+        async def wrapper(*args, **kwargs):
+            # Surely there is a better way
+            agent = None
+            for arg in args:
+                if isinstance(arg, RPCClient):
+                    agent = arg
+                    break
 
-        disconnect = kwargs.pop("disconnect", True)
-        connect = kwargs.pop("connect", True)
-        in_session = kwargs.pop("in_session", False)
+            disconnect = kwargs.pop("disconnect", True)
+            connect = kwargs.pop("connect", True)
+            in_session = kwargs.pop("in_session", False)
 
-        print(
-            f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session}"
-        )
+            # print(
+            #     f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session}"
+            # )
+            try:
+                # they shoudl probably both have a channel id
+                if in_session:
+                    await handle_session(agent)
+                else:
+                    await handle_connection(agent, connect, exclusive)
 
-        if in_session:
-            await handle_session(agent)
-        else:
-            await handle_connection(agent, connect)
+                if not agent.transport.connected:
+                    log.error("Connection failed... returning")
+                    return
 
-        if not agent.transport.connected:
-            log.error("Connection failed... returning")
-            return
+                res = await f(*args, **kwargs)
 
-        res = await f(*args, **kwargs)
+                if not in_session and disconnect:
+                    await agent.transport.disconnect()
 
-        if not in_session and disconnect:
-            await agent.transport.disconnect()
+                return res
+            except Exception as e:
+                print(repr(e))
+                exit(0)
 
-        return res
+        return wrapper
 
-    return wrapper
+    if f:
+        return inner(f)
+    else:
+        return inner
 
 
 class SyncStrategy(Enum):
@@ -285,7 +299,6 @@ class HitCounter:
     #     return pretty_repr(me)
 
     def update(self, hit: bool):
-
         changed = False
         self.counter += 1
         raw_copy = copy(self.raw)

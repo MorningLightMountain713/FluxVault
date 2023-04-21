@@ -1,6 +1,8 @@
 import logging
 
 from rich.logging import RichHandler
+from logging.handlers import QueueHandler, QueueListener
+import queue
 
 
 def configure_logs(log_to_file, logfile_path, debug):
@@ -39,6 +41,11 @@ def configure_logs(log_to_file, logfile_path, debug):
 #     "%(asctime)s: fluxvault: %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"
 # )
 
+# que = queue.Queue(-1)  # no limit on size
+# queue_handler = QueueHandler(que)
+# handler = logging.StreamHandler()
+# listener = QueueListener(que, handler)
+
 format = "%(name)s: %(message)s"
 
 logging.basicConfig(
@@ -47,6 +54,8 @@ logging.basicConfig(
     datefmt="%d/%m/%y %H:%M:%S%z",
     handlers=[RichHandler(level="NOTSET")],
 )
-
-# log = logging.getLogger("fluxvault")
+# logging.getLogger("asyncio").setLevel(logging.DEBUG)
 log = logging.getLogger("fluxvault")
+
+# log.addHandler(queue_handler)
+# listener.start()

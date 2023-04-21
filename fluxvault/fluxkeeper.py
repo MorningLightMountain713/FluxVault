@@ -434,6 +434,7 @@ class FluxAppManager:
         red_box = "\U0001F7E5"  # False
         yellow_box = "\U0001F7E8"  # True
         blue_box = "\U0001F7E6"  # False
+        black_box = "\U00002B1B"  # None
 
         if colors == "red_green":
             output = green_box if subject else red_box
@@ -962,10 +963,10 @@ class FluxAppManager:
 
         agent_proxy = agent.get_proxy()
 
-        start = time.monotonic()
+        # start = time.monotonic()
         remote_fs_objects = await agent_proxy.get_all_object_hashes(remote_paths)
-        elapsed = time.monotonic() - start
-        log.info(f"Time to get hashes: {round(elapsed, 4)}")
+        # elapsed = time.monotonic() - start
+        # log.info(f"Time to get hashes: {round(elapsed, 4)}")
 
         log.debug(f"Agent {agent.id} remote file CRCs: {remote_fs_objects}")
 
@@ -974,6 +975,7 @@ class FluxAppManager:
             return
 
         fixed_objects = []
+
         for remote_fs_object in remote_fs_objects:
             # this is broken. If we're a dir, any children have already been fixed. Don't
             # need to resolve them too. So need to keep track of the parent.
@@ -992,8 +994,10 @@ class FluxAppManager:
 
             managed_object.remote_crc = remote_fs_object["crc32"]
             # this just crc's the local object, I had this disabled so only validate files
-            # on boot but meh
-            managed_object.validate_local_object()
+            # on boot but meh - disabled again, it's fucking slow and blocking my shit, tried in a thread
+            # but the expensive of shunting to a thread is probably too much. I should probably split this whole
+            # function from sync / async and run in thread
+            # await asyncio.to_thread(managed_object.validate_local_object)
             managed_object.compare_objects()
 
             if not managed_object.local_object_exists:
@@ -1026,16 +1030,15 @@ class FluxAppManager:
 
             if not managed_object.in_sync and managed_object.concrete_fs.storable:
                 # so here we need to figure any children dirs and set them manually to in_sync
-                start = time.monotonic()
                 fixed = await self.resolve_directory_state(
                     component, managed_object, agent_proxy
                 )
-                elapsed = time.monotonic() - start
-                log.info(f"Time to resolve state: {round(elapsed, 4)}")
                 fixed_objects.extend(fixed)
 
             if not managed_object.in_sync and not managed_object.concrete_fs.storable:
                 await self.resolve_file_state(managed_object, agent_proxy)
+
+        # log.info(f"Time to sync objects: {time.monotonic() - start}")
 
     def poll_all_agents(self):
         self.keeper.loop.run_until_complete(self.run_agent_tasks())
@@ -1105,7 +1108,7 @@ class FluxAppManager:
                 else:
                     self.running_tasks[agent.id].append(t)
 
-    @manage_transport
+    @manage_transport(exclusive=True)
     async def ping_pong(
         self,
         agent: RPCClient,
@@ -1121,7 +1124,7 @@ class FluxAppManager:
         state = NodeContactState()
         self.network_state[agent.id].update({"contact_state": state})
 
-        agent_proxy = agent.get_proxy()
+        agent_proxy = agent.get_proxy(exclusive=True)
 
         async def run_callback(callback) -> bool:
             # this_task = next(
@@ -1158,14 +1161,16 @@ class FluxAppManager:
                     # elapsed time is very, very, short
                     # However, what happens if we get 3 timeouts, do we need to cancel
                     # the tasks
-                    resp = await asyncio.wait_for(
-                        asyncio.shield(agent_proxy.ping()), timeout=interval
-                    )
+                    agent_proxy.set_timeout(interval)
+                    # resp = await asyncio.wait_for(
+                    #     asyncio.shield(agent_proxy.ping()), timeout=interval
+                    # )
+                    resp = await agent_proxy.ping()
                 except asyncio.TimeoutError as e:
                     state.update_hit_counter(False)
                     consecutive_misses += 1
                     log.error(
-                        f"Error pinging remote: {agent.id}. Consecutive_misses: {consecutive_misses}. Error: {repr(e)}"
+                        f"Error pinging remote: {agent.id}. Consecutive_misses: {consecutive_misses}"
                     )
                     if consecutive_misses >= 10:
                         consecutive_misses = 0
@@ -1200,7 +1205,7 @@ class FluxAppManager:
                         print(repr(e))
 
                 except Exception as e:
-                    print(f"Exiting: {repr(e)}")
+                    print(f"Exiting ping forever: {repr(e)}")
                     exit(1)
                 else:
                     rtt = time.monotonic() - start
@@ -1351,10 +1356,11 @@ class FluxAppManager:
 
     @asynccontextmanager
     async def agent_sessions(self, agents: list[tuple] = []):
-        agents = [self.get_agent_by_id(x) for x in agents]
-        agents = list(filter(None, agents))
-
-        agents = agents if agents else self.agents
+        if agents:
+            agents = [self.get_agent_by_id(x) for x in agents]
+            agents = list(filter(None, agents))
+        else:
+            agents = self.agents
 
         for agent in agents:
             await agent.transport.session.start()
@@ -1364,12 +1370,24 @@ class FluxAppManager:
         for agent in agents:
             await agent.transport.session.end()
 
+    async def task_runner(self, agent: RPCClient, tasks: list[FluxTask]) -> dict:
+        # con_kwargs = {"in_session": True}
+        results = {}
+
+        for task in tasks:
+            if not task.func:
+                continue
+
+            res = await task.func(agent, *task.args, **task.kwargs, in_session=True)
+            results[task.func.__name__] = res
+
+        return {agent.id: results}
+
     async def run_session_tasks(
         self,
         tasks: list[FluxTask] = [],
         targets: dict[AgentId, list[FluxTask]] = {},
     ) -> dict[tuple, dict]:
-
         if not self.agents:
             log.info("No agents found... nothing to do")
             return
@@ -1377,25 +1395,8 @@ class FluxAppManager:
         if not tasks and not targets:
             tasks = self.set_default_tasks()
 
-        con_kwargs = {"in_session": True}
-        coroutines = []
-
-        async def task_runner(agent: RPCClient, tasks: list[FluxTask]) -> dict:
-            results = {}
-
-            for task in tasks:
-                if not task.func:
-                    continue
-
-                res = await task.func(agent, *task.args, **task.kwargs, **con_kwargs)
-                results[task.func.__name__] = res
-
-            return {agent.id: results}
-
         agents = []
         for target, agent_tasks in targets.items():
-            # if not seesion.started ??? connect? Should a session encapsulate
-            # an agent?
             if agent := self.get_agent_by_id(target):
                 agents.append((agent, agent_tasks))
             else:
@@ -1406,8 +1407,9 @@ class FluxAppManager:
 
         # log.info(f"Agent session tasks: {pretty_repr(agents)}")
 
+        coroutines = []
         for agent, tasks in agents:
-            t = asyncio.create_task(task_runner(agent, tasks))
+            t = asyncio.create_task(self.task_runner(agent, tasks))
             coroutines.append(t)
 
         try:
@@ -1417,8 +1419,9 @@ class FluxAppManager:
             if self.keeper.gui:
                 await self.keeper.gui.set_toast(repr(e))
 
-        if self.keeper.gui:
-            await self.keeper.gui.app_state_update(self.app.name, self.network_state)
+        # Going for speed gains... this takes hardly any time but trying for improvements
+        # if self.keeper.gui:
+        #     await self.keeper.gui.app_state_update(self.app.name, self.network_state)
 
         results = list(filter(None, results))
         results = reduce(lambda a, b: {**a, **b}, results)
@@ -1433,7 +1436,6 @@ class FluxAppManager:
         targets: dict[AgentId, list[FluxTask]] = {},
         async_tasks: bool = False,  # NotImplemented
     ) -> dict[tuple, dict]:
-
         if not self.agents:
             log.info("No agents found... nothing to do")
             return

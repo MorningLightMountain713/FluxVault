@@ -13,6 +13,8 @@ from typing import Callable
 import time
 from contextlib import asynccontextmanager
 
+import random
+
 import itertools
 import aiofiles
 
@@ -1138,6 +1140,9 @@ class FluxAppManager:
 
         # we are saying we have connected (decorator has run)
         sync_event.set()
+
+        # spread the heartbeats randomly over a second
+        await asyncio.sleep(random.random())
 
         state = NodeContactState()
         self.network_state[agent.id].update({"contact_state": state})

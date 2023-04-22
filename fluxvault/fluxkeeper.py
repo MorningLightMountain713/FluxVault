@@ -660,6 +660,7 @@ class FluxAppManager:
                         proxy_target="",
                         on_pty_data_callback=self.keeper.gui.pty_output,
                         on_pty_closed_callback=self.keeper.gui.pty_closed,
+                        rekey_timer=60,
                     )
                     flux_agent = RPCClient(JSONRPCProtocol(), transport, agent_id)
                     self.add(flux_agent)
@@ -1083,16 +1084,25 @@ class FluxAppManager:
         # build data model for ping stuff
         # this function should just add to network_state
 
-    def ping_all_nodes(
+    @staticmethod
+    async def wait_for_events(events: list[asyncio.Event]):
+        """Await each event, this ensures all events have completed"""
+        for event in events:
+            await event.wait()
+
+    async def ping_all_nodes(
         self, down_callback: Callable, up_callback: Callable, interval: int = 1
     ):
+        sync_events: list[asyncio.Event] = []
+
         for agent in self.agents:
+            sync_event = asyncio.Event()
+            sync_events.append(sync_event)
             agent_tasks = self.running_tasks.get(agent.id, [])
 
             ping_task = next(
                 filter(lambda x: x.get_name() == "ping", agent_tasks), None
             )
-
             if not ping_task:
                 t = asyncio.create_task(
                     self.ping_pong(
@@ -1100,6 +1110,7 @@ class FluxAppManager:
                         interval=interval,
                         down_callback=down_callback,
                         up_callback=up_callback,
+                        sync_event=sync_event,
                     ),
                     name="ping",
                 )
@@ -1108,6 +1119,9 @@ class FluxAppManager:
                 else:
                     self.running_tasks[agent.id].append(t)
 
+        # this needs a timeout
+        await self.wait_for_events(sync_events)
+
     @manage_transport(exclusive=True)
     async def ping_pong(
         self,
@@ -1115,15 +1129,18 @@ class FluxAppManager:
         interval: int,
         down_callback: Callable,
         up_callback: Callable,
+        sync_event: asyncio.Event,
     ):
         """Ping node once every interval seconds. This interval includes the RTT of the ping,
         if the RTT exceeds the interval, it is pinged again immediately. If the nodes
         missed 3 pings (intervals) or doesn't respond with the correct PONG - the user provided
         callback is called and we stop pinging"""
-        # if we get here it means we've already connected, i.e. we're active
+
+        # we are saying we have connected (decorator has run)
+        sync_event.set()
+
         state = NodeContactState()
         self.network_state[agent.id].update({"contact_state": state})
-
         agent_proxy = agent.get_proxy(exclusive=True)
 
         async def run_callback(callback) -> bool:
@@ -1380,6 +1397,8 @@ class FluxAppManager:
 
             res = await task.func(agent, *task.args, **task.kwargs, in_session=True)
             results[task.func.__name__] = res
+            # let loop run something else, otherwise we hogin
+            await asyncio.sleep(0.05)
 
         return {agent.id: results}
 

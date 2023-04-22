@@ -159,7 +159,7 @@ def manage_transport(f=None, exclusive: bool = False):
             in_session = kwargs.pop("in_session", False)
 
             # print(
-            #     f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session}"
+            #     f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session} agent: {agent.id}"
             # )
             try:
                 # they shoudl probably both have a channel id

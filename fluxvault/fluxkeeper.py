@@ -426,7 +426,7 @@ class FluxAppManager:
 
     @staticmethod
     def add_symbol_to_list(
-        subject: bool,
+        subject: bool | None,
         target: list,
         insert_loc: int | None = None,
         colors: str = "red_green",
@@ -436,9 +436,13 @@ class FluxAppManager:
         red_box = "\U0001F7E5"  # False
         yellow_box = "\U0001F7E8"  # True
         blue_box = "\U0001F7E6"  # False
-        black_box = "\U00002B1B"  # None
+        # black_box = "\U00002B1B"  # None
+        black_box = "  "
 
-        if colors == "red_green":
+        if subject is None:
+            output = black_box
+
+        elif colors == "red_green":
             output = green_box if subject else red_box
 
         elif colors == "blue_yellow":
@@ -529,7 +533,10 @@ class FluxAppManager:
                     # these are the oldest first
                     start = i * 4
                     blocks = list(itertools.islice(hit_counter.raw, start, start + 4))
-                    last_4: bool = all(blocks)
+                    if all(x is None for x in blocks):
+                        last_4 = None
+                    else:
+                        last_4: bool = all(blocks)
 
                     self.add_symbol_to_list(last_4, one_sec_column, one_sec_blocks)
 
@@ -1135,7 +1142,7 @@ class FluxAppManager:
     ):
         """Ping node once every interval seconds. This interval includes the RTT of the ping,
         if the RTT exceeds the interval, it is pinged again immediately. If the nodes
-        missed 3 pings (intervals) or doesn't respond with the correct PONG - the user provided
+        missed 4 pings (intervals) or doesn't respond with the correct PONG - the user provided
         callback is called and we stop pinging"""
 
         # we are saying we have connected (decorator has run)
@@ -1147,6 +1154,7 @@ class FluxAppManager:
         state = NodeContactState()
         self.network_state[agent.id].update({"contact_state": state})
         agent_proxy = agent.get_proxy(exclusive=True)
+        transport: EncryptedSocketClientTransport = agent.transport
 
         async def run_callback(callback) -> bool:
             # this_task = next(
@@ -1167,110 +1175,95 @@ class FluxAppManager:
 
         async def ping_forever():
             # logic
-            DOWN_NODE_INTERVAL = interval * 10
             QUARANTINE_TIMER = 300
-            # if 3 missed in a row... you're out of here
-            # if 6 missed in a one minute period... you're out of here
+            # if 4 missed in a row... you're out of here
+            # if 8 missed in a one minute period... you're out of here
             consecutive_misses = 0
-            while True:
-                # switch back to monotonic for those gainz
-                start = time.perf_counter()
-                try:
-                    # we need shield here, if we don't and we timeout, the task gets cancelled,
-                    # which stops the transport pulling the message off the queue; depending on where we
-                    # # hit the timeout. So we could have an extra
-                    # message in there, which gets returned immediately, making it look like the
-                    # elapsed time is very, very, short
-                    # However, what happens if we get 3 timeouts, do we need to cancel
-                    # the tasks
-                    agent_proxy.set_timeout(interval)
-                    # resp = await asyncio.wait_for(
-                    #     asyncio.shield(agent_proxy.ping()), timeout=interval
-                    # )
-                    resp = await agent_proxy.ping()
-                except asyncio.TimeoutError as e:
-                    state.update_hit_counter(False)
-                    consecutive_misses += 1
-                    log.error(
-                        f"Error pinging remote: {agent.id}. Consecutive_misses: {consecutive_misses}"
-                    )
-                    if consecutive_misses >= 10:
-                        consecutive_misses = 0
-                        await agent.transport.disconnect()
-                        try:
-                            await agent.transport.ensure_connected()
-                        except Exception as e:
-                            print("orangutan")
-                            print(repr(e))
-                        continue
+            agent_proxy.set_timeout(interval)
+            connect_task = None
 
-                    elif consecutive_misses >= 4 or state.one_minute_miss_count >= 8:
+            while True:
+                start = time.perf_counter()
+                if connect_task and not connect_task.done():
+                    state.update_hit_counter(None)
+                else:
+                    connect_task = None
+                    try:
+                        resp = await agent_proxy.ping()
+                    except asyncio.TimeoutError as e:
+                        # fix this up, just make one call
+                        state.update_hit_counter(False)
+                        state.increment_counters()
+                        consecutive_misses += 1
+                        log.error(
+                            f"Error pinging remote: {agent.id}. Consecutive_misses: {consecutive_misses}"
+                        )
+                        if consecutive_misses >= 10:
+                            consecutive_misses = 0
+                            # fix ensure connected so that it ensures there are no channels first
+                            # then we don't have to disconnect here. Pass chan_id to ensure connected?
+                            await transport.disconnect(agent_proxy.chan_id)
+
+                            connect_task = asyncio.create_task(
+                                transport.ensure_connected()
+                            )
+
+                        elif (
+                            consecutive_misses >= 4 or state.one_minute_miss_count >= 8
+                        ):
+                            if state.active:
+                                state.transitions.append(StateTransition(False))
+                                await run_callback(down_callback)
+
+                    except (ConnectionResetError, BrokenPipeError) as e:
+                        log.error(f"Agent: {agent.id} disconnected with E: {repr(e)}")
+                        # state.increment_counters()
+                        consecutive_misses = 0
+                        await transport.disconnect(agent_proxy.chan_id)
+
                         if state.active:
                             state.transitions.append(StateTransition(False))
                             await run_callback(down_callback)
 
-                    else:
-                        state.increment_counters()
+                        connect_task = asyncio.create_task(transport.ensure_connected())
 
-                except (ConnectionResetError, BrokenPipeError) as e:
-                    log.error(f"Agent: {agent.id} disconnected with E: {repr(e)}")
-                    state.increment_counters()
-                    consecutive_misses = 0
-                    await agent.transport.disconnect()
-                    if state.active:
-                        state.transitions.append(StateTransition(False))
-                        await run_callback(down_callback)
-                    try:
-                        await agent.transport.ensure_connected()
                     except Exception as e:
-                        print("giraffe")
-                        print(repr(e))
-
-                except Exception as e:
-                    print(f"Exiting ping forever: {repr(e)}")
-                    exit(1)
-                else:
-                    rtt = time.monotonic() - start
-                    try:
-                        state.update_rtt(rtt)
-                        state.update_hit_counter(True)
-                    except Exception as e:
-                        print(repr(e))
-
-                    consecutive_misses = 0
-                    if resp != "PONG":
-                        log.warning(f"Received incorrect ping response: {resp}")
-
-                    if not state.active and not state.in_quarantine:
-                        log.info(
-                            f"Node resumed... putting into quarantine for 300 seconds"
-                        )
-                        state.transitions.append(StateTransition(True))
-                        state.quarantine()
-
-                    elif state.in_quarantine:
-                        if (
-                            start - state.quarantine_timer > QUARANTINE_TIMER
-                            and state.one_minute_miss_count < 6
-                        ):
-                            log.info(f"Node has passed quarantine tests... reinstating")
-                            state.dequarantine()
-                            await run_callback(up_callback)
-                finally:
-                    state.total_count += 1
-                    elapsed = time.perf_counter() - start
-                    # if state.total_count % 10 == 0:
-                    #     print(
-                    #         f"{agent.id} count: {state.total_count} elapsed: {elapsed}"
-                    #     )
-
-                    if not state.active and not state.in_quarantine:
-                        timer = DOWN_NODE_INTERVAL
+                        print(f"Exiting ping forever: {repr(e)}")
+                        exit(1)
                     else:
-                        timer = interval
-                    to_sleep = max(0, timer - elapsed)
-                    # print(f"To sleep: {to_sleep}")
-                    await asyncio.sleep(to_sleep)
+                        rtt = time.perf_counter() - start
+                        try:
+                            state.update_rtt(rtt)
+                            state.update_hit_counter(True)
+                        except Exception as e:
+                            print(repr(e))
+
+                        consecutive_misses = 0
+                        if resp != "PONG":
+                            log.warning(f"Received incorrect ping response: {resp}")
+
+                        if not state.active and not state.in_quarantine:
+                            log.info(
+                                f"Node resumed... putting into quarantine for 300 seconds"
+                            )
+                            state.transitions.append(StateTransition(True))
+                            state.quarantine()
+
+                        elif state.in_quarantine:
+                            if (
+                                start - state.quarantine_timer > QUARANTINE_TIMER
+                                and state.one_minute_miss_count < 6
+                            ):
+                                log.info(
+                                    f"Node has passed quarantine tests... reinstating"
+                                )
+                                state.dequarantine()
+                                await run_callback(up_callback)
+
+                state.total_count += 1
+                elapsed = time.perf_counter() - start
+                to_sleep = max(0, interval - elapsed)
+                await asyncio.sleep(to_sleep)
 
         await ping_forever()
         # pprint(asyncio.all_tasks())

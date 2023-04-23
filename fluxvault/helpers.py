@@ -32,115 +32,72 @@ from fluxrpc.transports.socket.symbols import (
     PROXY_AUTH_ADDRESS_REQUIRED,
     PROXY_AUTH_DENIED,
 )
+from fluxrpc.transports.socket.client import EncryptedSocketClientTransport
+
 
 from fluxvault.log import log
 from rich.pretty import pprint
 
 
-async def handle_session(agent):
-    if agent.transport.session.started:
-        if not agent.transport.session.connection_attempted:
-            await agent.transport.session.start(connect=True)
+async def handle_session(transport: EncryptedSocketClientTransport):
+    if transport.session.started:
+        if not transport.session.connection_attempted:
+            await transport.session.start(connect=True)
 
-            if signing_address := agent.transport.session.signing_address:
+            if signing_address := transport.session.signing_address:
                 signing_key = keyring.get_password("fluxvault_app", signing_address)
 
                 if not signing_key:
                     log.error(f"Signing key required in keyring for {signing_address}")
+                    # fix this no address
                     raise FluxVaultKeyError(
-                        f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
+                        f"Reason: {transport.failed_on} Signing key not present in secure storage"
                     )
 
-                await agent.transport.session.connect(signing_key)
+                await transport.session.connect(signing_key)
 
 
-async def handle_connection(agent: RPCClient, connect: bool, exclusive: bool = False):
+async def handle_connection(
+    transport: EncryptedSocketClientTransport, connect: bool, exclusive: bool = False
+) -> int | None:
     if connect:
-        await agent.transport.connect(
+        chan_id = await transport.connect(
             exclusive=exclusive
         )  # this gives us exclusive use of channel
-        if agent.transport.connected:
-            return
+        if transport.connected:
+            return chan_id
 
-    if not agent.transport.connected:
+    if not transport.connected:
         log.info("Transport not connected... checking connection requirements...")
-        log.info(f"Failed on {agent.transport.failed_on}")
+        log.info(f"Failed on {transport.failed_on}")
 
-        if agent.transport.failed_on == NO_SOCKET:
+        if transport.failed_on == NO_SOCKET:
             return
 
         address = ""
         # match/case
-        if agent.transport.failed_on in [AUTH_ADDRESS_REQUIRED, AUTH_DENIED]:
+        if transport.failed_on in [AUTH_ADDRESS_REQUIRED, AUTH_DENIED]:
             address = "auth_address"
-        elif agent.transport.failed_on in [
+        elif transport.failed_on in [
             PROXY_AUTH_ADDRESS_REQUIRED,
             PROXY_AUTH_DENIED,
         ]:
             address = "proxy_auth_address"
 
-        signing_key = keyring.get_password(
-            "fluxvault_app", getattr(agent.transport, address)
-        )
+        signing_key = keyring.get_password("fluxvault_app", getattr(transport, address))
 
         if not signing_key:
             log.error(
-                f"Signing key required in keyring for {getattr(agent.transport, address)}"
+                f"Signing key required in keyring for {getattr(transport, address)}"
             )
             raise FluxVaultKeyError(
-                f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
+                f"Reason: {transport.failed_on} Signing key for address: {getattr(transport, address)} not present in secure storage"
             )
 
         auth_provider = SignatureAuthProvider(key=signing_key)
-        agent.transport.auth_provider = auth_provider
-        await agent.transport.connect(exclusive=True)
+        transport.auth_provider = auth_provider
 
-
-# def manage_session(f):
-#     @functools.wraps(f)
-#     async def wrapper(*args, **kwargs):
-#         # Surely there is a better way
-#         agent = None
-#         for arg in args:
-#             if isinstance(arg, RPCClient):
-#                 agent = arg
-#                 break
-
-#         if not agent:
-#             return
-
-#         if agent.transport.session.started:
-#             if not agent.transport.session.connection_attempted:
-#                 await agent.transport.session.start(connect=True)
-
-#                 if signing_address := agent.transport.session.signing_address:
-#                     signing_key = keyring.get_password("fluxvault_app", signing_address)
-
-#                     if not signing_key:
-#                         log.error(
-#                             f"Signing key required in keyring for {signing_address}"
-#                         )
-#                         raise FluxVaultKeyError(
-#                             f"Reason: {agent.transport.failed_on} Signing key for address: {getattr(agent.transport, address)} not present in secure storage"
-#                         )
-
-#                     await agent.transport.session.connect(signing_key)
-
-#         # print("wrapper args", args)
-#         # print("wrapper kwargs", kwargs)
-
-#         # try:
-#         res = await f(*args, **kwargs)
-#         # except asyncio.TimeoutError:
-#         #     # Not sure about this
-#         #     agent.transport.failed_on = NO_SOCKET
-#         #     agent.transport.connected = False
-#         #     res = None
-#         #     log.error(f"Timeout error waiting for response from: {f.__name__}")
-
-#         return res
-
-#     return wrapper
+        return await transport.connect(exclusive=exclusive)
 
 
 def manage_transport(f=None, exclusive: bool = False):
@@ -154,6 +111,8 @@ def manage_transport(f=None, exclusive: bool = False):
                     agent = arg
                     break
 
+            transport: EncryptedSocketClientTransport = agent.transport
+
             disconnect = kwargs.pop("disconnect", True)
             connect = kwargs.pop("connect", True)
             in_session = kwargs.pop("in_session", False)
@@ -164,18 +123,18 @@ def manage_transport(f=None, exclusive: bool = False):
             try:
                 # they shoudl probably both have a channel id
                 if in_session:
-                    await handle_session(agent)
+                    chan_id = await handle_session(transport)
                 else:
-                    await handle_connection(agent, connect, exclusive)
+                    chan_id = await handle_connection(transport, connect, exclusive)
 
-                if not agent.transport.connected:
+                if not transport.connected:
                     log.error("Connection failed... returning")
                     return
 
                 res = await f(*args, **kwargs)
 
                 if not in_session and disconnect:
-                    await agent.transport.disconnect()
+                    await transport.disconnect(chan_id)
 
                 return res
             except Exception as e:
@@ -293,12 +252,20 @@ class HitCounter:
     last_update: UnixTime = 0
     counter: int = 0
 
-    # def __repr__(self):
-    #     me = self.__dict__.copy()
-    #     del me["raw"]
-    #     return pretty_repr(me)
+    @staticmethod
+    def advance_queue(hit: bool | None, subject: deque, previous: deque) -> bool:
+        initial_state = copy(subject)
 
-    def update(self, hit: bool):
+        if all(x is None for x in previous):
+            data = None
+        else:
+            data = all(previous)
+
+        subject.append(data)
+
+        return initial_state != subject
+
+    def update(self, hit: bool | None):
         changed = False
         self.counter += 1
         raw_copy = copy(self.raw)
@@ -308,22 +275,37 @@ class HitCounter:
             changed = True
 
         if self.counter % (60 * 1) == 0:
-            one_min_copy = copy(self.one_minute)
-            self.one_minute.append(all(self.raw))
-            if one_min_copy != self.one_minute:
-                changed = True
+            # one_min_copy = copy(self.one_minute)
+            # if hit is None:
+            #     self.one_minute.append(None)
+            # else:
+            #     self.one_minute.append(all(self.raw))
+
+            # if one_min_copy != self.one_minute:
+            #     changed = True
+            changed = self.advance_queue(hit, self.one_minute, self.raw)
 
         if self.counter % (60 * 15) == 0:
-            fifteen_min_copy = copy(self.fifteen_minute)
-            self.fifteen_minute.append(all(self.one_minute))
-            if fifteen_min_copy != self.fifteen_minute:
-                changed = True
+            # fifteen_min_copy = copy(self.fifteen_minute)
+            # if hit is None:
+            #     self.fifteen_minute.append(None)
+            # else:
+            #     self.fifteen_minute.append(all(self.one_minute))
+
+            # if fifteen_min_copy != self.fifteen_minute:
+            #     changed = True
+            changed = self.advance_queue(hit, self.fifteen_minute, self.one_minute)
 
         if self.counter % (60 * 60) == 0:
-            one_hour_copy = copy(self.fifteen_minute)
-            self.one_hour.append(all(self.fifteen_minute))
-            if one_hour_copy != self.one_hour:
-                changed = True
+            # one_hour_copy = copy(self.fifteen_minute)
+            # if hit is None:
+            #     self.one_hour.append(None)
+            # else:
+            #     self.one_hour.append(all(self.fifteen_minute))
+
+            # if one_hour_copy != self.one_hour:
+            #     changed = True
+            changed = self.advance_queue(hit, self.one_hour, self.fifteen_minute)
 
             self.counter = 0
 
@@ -423,7 +405,7 @@ class NodeContactState:
         self.in_quarantine = False
         self.quarantine_timer = 0
 
-    def update_hit_counter(self, hit: bool):
+    def update_hit_counter(self, hit: bool | None):
         self.hit_counter.update(hit)
 
     def update_rtt(self, rtt: float):

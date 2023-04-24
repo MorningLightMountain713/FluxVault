@@ -1202,7 +1202,8 @@ class FluxAppManager:
                             consecutive_misses = 0
                             # fix ensure connected so that it ensures there are no channels first
                             # then we don't have to disconnect here. Pass chan_id to ensure connected?
-                            await transport.disconnect(agent_proxy.chan_id)
+                            # don't even need the chan_id here
+                            await transport.disconnect(agent_proxy.chan_id, force=True)
 
                             connect_task = asyncio.create_task(
                                 transport.ensure_connected()
@@ -1219,7 +1220,7 @@ class FluxAppManager:
                         log.error(f"Agent: {agent.id} disconnected with E: {repr(e)}")
                         # state.increment_counters()
                         consecutive_misses = 0
-                        await transport.disconnect(agent_proxy.chan_id)
+                        await transport.disconnect(agent_proxy.chan_id, force=True)
 
                         if state.active:
                             state.transitions.append(StateTransition(False))

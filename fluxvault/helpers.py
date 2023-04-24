@@ -117,12 +117,13 @@ def manage_transport(f=None, exclusive: bool = False):
             connect = kwargs.pop("connect", True)
             in_session = kwargs.pop("in_session", False)
 
-            # print(
-            #     f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session} agent: {agent.id}"
-            # )
+            log.debug(
+                f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session} agent: {agent.id}"
+            )
+
             try:
-                # they shoudl probably both have a channel id
                 if in_session:
+                    # this doesn't actually return a chan_id
                     chan_id = await handle_session(transport)
                 else:
                     chan_id = await handle_connection(transport, connect, exclusive)

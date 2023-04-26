@@ -45,7 +45,11 @@ async def handle_session(transport: EncryptedSocketClientTransport):
             await transport.session.start(connect=True)
 
             if signing_address := transport.session.signing_address:
-                signing_key = keyring.get_password("fluxvault_app", signing_address)
+                start = time.perf_counter()
+                signing_key = await asyncio.to_thread(
+                    keyring.get_password, "fluxvault_app", signing_address
+                )
+                print(f"Time to get keyring stuff: {time.perf_counter() - start}")
 
                 if not signing_key:
                     log.error(f"Signing key required in keyring for {signing_address}")
@@ -129,7 +133,7 @@ def manage_transport(f=None, exclusive: bool = False):
                     chan_id = await handle_connection(transport, connect, exclusive)
 
                 if not transport.connected:
-                    log.error("Connection failed... returning")
+                    log.error(f"{agent.id}: Connection failed... returning")
                     return
 
                 res = await f(*args, **kwargs)

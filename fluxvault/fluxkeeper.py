@@ -1105,14 +1105,15 @@ class FluxAppManager:
         sync_events: list[asyncio.Event] = []
 
         for agent in self.agents:
-            sync_event = asyncio.Event()
-            sync_events.append(sync_event)
             agent_tasks = self.running_tasks.get(agent.id, [])
 
             ping_task = next(
                 filter(lambda x: x.get_name() == "ping", agent_tasks), None
             )
             if not ping_task:
+                sync_event = asyncio.Event()
+                sync_events.append(sync_event)
+
                 t = asyncio.create_task(
                     self.ping_pong(
                         agent,
@@ -1187,7 +1188,11 @@ class FluxAppManager:
                 if connect_task and not connect_task.done():
                     state.update_hit_counter(None)
                 else:
-                    connect_task = None
+                    if connect_task:  # reconnected
+                        new_chan_id = connect_task.result()
+                        agent_proxy.chan_id = new_chan_id
+                        connect_task = None
+
                     try:
                         resp = await agent_proxy.ping()
                     except asyncio.TimeoutError as e:
@@ -1203,10 +1208,9 @@ class FluxAppManager:
                             # fix ensure connected so that it ensures there are no channels first
                             # then we don't have to disconnect here. Pass chan_id to ensure connected?
                             # don't even need the chan_id here
-                            await transport.disconnect(agent_proxy.chan_id, force=True)
 
                             connect_task = asyncio.create_task(
-                                transport.ensure_connected()
+                                transport.ensure_connected(disconnect_all_channels=True)
                             )
 
                         elif (
@@ -1220,13 +1224,15 @@ class FluxAppManager:
                         log.error(f"Agent: {agent.id} disconnected with E: {repr(e)}")
                         # state.increment_counters()
                         consecutive_misses = 0
-                        await transport.disconnect(agent_proxy.chan_id, force=True)
+                        # await transport.disconnect(agent_proxy.chan_id, force=True)
 
                         if state.active:
                             state.transitions.append(StateTransition(False))
                             await run_callback(down_callback)
 
-                        connect_task = asyncio.create_task(transport.ensure_connected())
+                        connect_task = asyncio.create_task(
+                            transport.ensure_connected(disconnect_all_channels=True)
+                        )
 
                     except Exception as e:
                         print(f"Exiting ping forever: {repr(e)}")

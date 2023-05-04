@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import shutil
-from dataclasses import dataclass, field
 from functools import reduce
 from pathlib import Path
 from typing import Callable
@@ -14,6 +13,7 @@ import time
 from contextlib import asynccontextmanager
 
 import random
+import inspect
 
 import itertools
 import aiofiles
@@ -523,6 +523,7 @@ class FluxAppManager:
                 for ping in reversed(hit_counter.raw):
                     self.add_symbol_to_list(ping, one_sec_column, colors="blue_yellow")
             else:
+                # why reverse?
                 fifo_pings = list(reversed(hit_counter.raw))
                 # get the newest first
                 for ping in fifo_pings[0:one_sec_blocks]:
@@ -645,19 +646,17 @@ class FluxAppManager:
             for ip in extra:
                 self.remove(ip)
 
-            # this is stupid too. Theyre all getting the same auth provider anyway,
-            # it only matters on the agent (they store stuff on the provider)
-            auth_provider = None
-            if self.app.sign_connections and self.app.signing_key:
-                auth_provider = SignatureAuthProvider(key=self.app.signing_key)
+            if missing:
+                auth_provider = None
+                if self.app.sign_connections and self.app.signing_key:
+                    auth_provider = SignatureAuthProvider(key=self.app.signing_key)
 
-            # this seems pretty broken
-            if self.app.app_mode == AppMode.SINGLE_COMPONENT:
-                component_name = self.app.get_component().name
-            else:
-                component_name = "fluxagent"
+                # this seems pretty broken
+                if self.app.app_mode == AppMode.SINGLE_COMPONENT:
+                    component_name = self.app.get_component().name
+                else:
+                    component_name = "fluxagent"
 
-            try:
                 for ip in missing:
                     agent_id = (self.app.name, ip, component_name)
                     self.network_state[agent_id] = {}
@@ -674,8 +673,9 @@ class FluxAppManager:
                     flux_agent = RPCClient(JSONRPCProtocol(), transport, agent_id)
                     self.add(flux_agent)
                     log.info(f"Agent {flux_agent.id} added...")
-            except Exception as e:
-                print(repr(e))
+                    # yield control here, this can hog the loop a bit for some reason
+                    # review this... seems dodgey
+                    await asyncio.sleep(0)
 
             # if addresses were passed in, we don't need to loop
             if self.app.fluxnode_ips:
@@ -1243,6 +1243,7 @@ class FluxAppManager:
                             state.update_rtt(rtt)
                             state.update_hit_counter(True)
                         except Exception as e:
+                            print("update_rtt")
                             print(repr(e))
 
                         consecutive_misses = 0
@@ -1393,17 +1394,23 @@ class FluxAppManager:
             await agent.transport.session.end()
 
     async def task_runner(self, agent: RPCClient, tasks: list[FluxTask]) -> dict:
-        # con_kwargs = {"in_session": True}
         results = {}
 
         for task in tasks:
             if not task.func:
                 continue
 
-            res = await task.func(agent, *task.args, **task.kwargs, in_session=True)
+            try:
+                res = await task.func(agent, *task.args, **task.kwargs, in_session=True)
+            except TimeoutError:
+                log.error(
+                    f"{agent.id} timed out waiting for result for {task.func.__name__} skipping all further tasks"
+                )
+                break
+
             results[task.func.__name__] = res
             # let loop run something else, otherwise we hogin
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0)
 
         return {agent.id: results}
 
@@ -1448,9 +1455,7 @@ class FluxAppManager:
         #     await self.keeper.gui.app_state_update(self.app.name, self.network_state)
 
         results = list(filter(None, results))
-        results = reduce(lambda a, b: {**a, **b}, results)
-
-        return results
+        return reduce(lambda a, b: a | b, results)
 
     async def run_agents_async(
         self,

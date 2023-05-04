@@ -45,11 +45,9 @@ async def handle_session(transport: EncryptedSocketClientTransport):
             await transport.session.start(connect=True)
 
             if signing_address := transport.session.signing_address:
-                start = time.perf_counter()
                 signing_key = await asyncio.to_thread(
                     keyring.get_password, "fluxvault_app", signing_address
                 )
-                print(f"Time to get keyring stuff: {time.perf_counter() - start}")
 
                 if not signing_key:
                     log.error(f"Signing key required in keyring for {signing_address}")
@@ -125,26 +123,22 @@ def manage_transport(f=None, exclusive: bool = False):
                 f"In wrapper for {f.__name__}, connect: {connect}, disconnect: {disconnect}, in_session: {in_session} agent: {agent.id}"
             )
 
-            try:
-                if in_session:
-                    # this doesn't actually return a chan_id
-                    chan_id = await handle_session(transport)
-                else:
-                    chan_id = await handle_connection(transport, connect, exclusive)
+            if in_session:
+                # this doesn't actually return a chan_id (it should)
+                chan_id = await handle_session(transport)
+            else:
+                chan_id = await handle_connection(transport, connect, exclusive)
 
-                if not transport.connected:
-                    log.error(f"{agent.id}: Connection failed... returning")
-                    return
+            if not transport.connected:
+                log.error(f"{agent.id}: Connection failed... returning")
+                return
 
-                res = await f(*args, **kwargs)
+            res = await f(*args, **kwargs)
 
-                if not in_session and disconnect:
-                    await transport.disconnect(chan_id)
+            if not in_session and disconnect:
+                await transport.disconnect(chan_id)
 
-                return res
-            except Exception as e:
-                print(repr(e))
-                exit(0)
+            return res
 
         return wrapper
 
@@ -184,13 +178,9 @@ def bytes_to_human(num, suffix="B"):
 
 
 def human_to_bytes(size: str):
-    # macOS etc
     units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12}
 
-    # Alternative unit definitions, notably used by Windows:
-    # units = {"B": 1, "KB": 2**10, "MB": 2**20, "GB": 2**30, "TB": 2**40}
-
-    number, unit = list(filter(None, re.split("(\d+)", size)))
+    number, unit = list(filter(None, re.split(r"(\d+)", size)))
     return int(float(number) * units[unit])
 
 
@@ -232,20 +222,20 @@ class UnixTime(float):
     ...
 
 
-class SymbolDeque(deque):
-    def __init__(self, symbols: list = ["\U0001F7E9", "\U0001F7E5"]):
-        self.update_symbols(symbols)
+# class SymbolDeque(deque):
+#     def __init__(self, symbols: list = ["\U0001F7E9", "\U0001F7E5"]):
+#         self.update_symbols(symbols)
 
-    def update_symbols(self, symbols: list):
-        # meh, IndexOutOfRange
-        self.positive = symbols[0]
-        self.negative = symbols[1]
+#     def update_symbols(self, symbols: list):
+#         # meh, IndexOutOfRange
+#         self.positive = symbols[0]
+#         self.negative = symbols[1]
 
-    def append(self, item):
-        if item:
-            super(SymbolDeque, self).append(self.positive)
-        else:
-            super(SymbolDeque, self).append(self.negative)
+#     def append(self, item):
+#         if item:
+#             super(SymbolDeque, self).append(self.positive)
+#         else:
+#             super(SymbolDeque, self).append(self.negative)
 
 
 @dataclass
@@ -258,7 +248,7 @@ class HitCounter:
     counter: int = 0
 
     @staticmethod
-    def advance_queue(hit: bool | None, subject: deque, previous: deque) -> bool:
+    def advance_queue(subject: deque, previous: deque | list) -> bool:
         initial_state = copy(subject)
 
         if all(x is None for x in previous):
@@ -280,37 +270,13 @@ class HitCounter:
             changed = True
 
         if self.counter % (60 * 1) == 0:
-            # one_min_copy = copy(self.one_minute)
-            # if hit is None:
-            #     self.one_minute.append(None)
-            # else:
-            #     self.one_minute.append(all(self.raw))
-
-            # if one_min_copy != self.one_minute:
-            #     changed = True
-            changed = self.advance_queue(hit, self.one_minute, self.raw)
+            changed = self.advance_queue(self.one_minute, self.raw)
 
         if self.counter % (60 * 15) == 0:
-            # fifteen_min_copy = copy(self.fifteen_minute)
-            # if hit is None:
-            #     self.fifteen_minute.append(None)
-            # else:
-            #     self.fifteen_minute.append(all(self.one_minute))
-
-            # if fifteen_min_copy != self.fifteen_minute:
-            #     changed = True
-            changed = self.advance_queue(hit, self.fifteen_minute, self.one_minute)
+            changed = self.advance_queue(self.fifteen_minute, self.one_minute)
 
         if self.counter % (60 * 60) == 0:
-            # one_hour_copy = copy(self.fifteen_minute)
-            # if hit is None:
-            #     self.one_hour.append(None)
-            # else:
-            #     self.one_hour.append(all(self.fifteen_minute))
-
-            # if one_hour_copy != self.one_hour:
-            #     changed = True
-            changed = self.advance_queue(hit, self.one_hour, self.fifteen_minute)
+            changed = self.advance_queue(self.one_hour, list(self.fifteen_minute)[-4:])
 
             self.counter = 0
 
@@ -384,19 +350,6 @@ class NodeContactState:
                 break
 
         return count
-
-    # def hit_counter(self) -> list[bool]:
-    #     interval = time.time() - 60
-    #     heartbeat = [True] * 60
-    #     for miss in reversed(self.misses):
-    #         if miss > interval:
-    #             in_second = miss - interval
-    #             in_second = math.floor(in_second)
-    #             heartbeat[in_second] = False
-    #         else:
-    #             break
-
-    #     return heartbeat
 
     def increment_counters(self):
         self.total_missed_count += 1
